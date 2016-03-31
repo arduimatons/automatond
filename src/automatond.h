@@ -2,12 +2,11 @@
   #define AUTOMATOND_H
   
   #include "automatond_config.h"
-  //nanomsg
-  #include <system_error>
-  #include <nnxx/message.h>
-  #include <nnxx/message_istream.h>
-  #include <nnxx/pair.h>
-  #include <nnxx/socket.h>
+
+
+
+#include <mosquitto.h>
+#include <mosquittopp.h>
   
   //json
   #include "rapidjson/document.h"
@@ -44,27 +43,59 @@
   #include <fcntl.h>
   #include <unistd.h>
   #include <getopt.h> 
+ #include <typeinfo>
   
   #ifdef OLED_DEBUG
     #include "ArduiPi_OLED_lib.h"
     #include "Adafruit_GFX.h"
     #include "ArduiPi_OLED.h"
-    void writeToOLED(ArduiPi_OLED &, std::string ,int ,int);
+    //void writeToOLED(ArduiPi_OLED &, std::string ,int ,int);
   #endif
 
   #define DAEMON_NAME "automatond"
 
-  void Rf24Relay(uint16_t, uint8_t , rf24_datarate_e, rf24_pa_dbm_e);
+  //void Rf24Relay(uint16_t, uint8_t , rf24_datarate_e, rf24_pa_dbm_e);
   static void show_usage(std::string);
 
   struct heartbeat_pl { long beat; };
-  void logMsg(std::string = "", std::string = "", std::string = "error"); 
-  void handleIncomingRF24Msg(nnxx::socket &, RF24Network &, ArduiPi_OLED &);
-  void handleIncomingNNMsg(nnxx::socket &, RF24Network &);
-  void sendBackErr(nnxx::socket &, std::string);
-  void signalHandler( int signum );
-  void sendHeartbeat(long &, RF24Network &);
-  void sendHeartbeat(RF24Network &);
-  std::string generateSignedPayload(std::string);
+
+  struct node {uint8_t node_id; char* node_name;};
+  //void logMsg(std::string = "", std::string = "", std::string = "error"); 
+  //void handleIncomingRF24Msg(nnxx::socket &, RF24Network &, ArduiPi_OLED &);
+  //void handleIncomingNNMsg(nnxx::socket &, RF24Network &);
+  //void sendBackErr(nnxx::socket &, std::string);
+  //void signalHandler( int signum );
+  //void sendHeartbeat(long &, RF24Network &);
+  //void sendHeartbeat(RF24Network &);
+  //std::string generateSignedPayload(std::string);
+
+  class ArduiRFMQTT: public mosqpp::mosquittopp
+  {
+    public:
+      ArduiRFMQTT(const char *id, const char *host, int port, RF24Network& network);
+      ~ArduiRFMQTT();
+      bool send_message(uint8_t from_node, const char * _message);
+      unsigned long lastBeatSent();
+      std::string generateSignedPayload(std::string msg_payload);
+      void sendHeartbeat();
+
+    private:
+     std::vector<node> node_list;
+     
+     unsigned long last_beat;
+     const char     *     host;
+     const char    *     id;
+     int                port;
+     int                keepalive;
+     void on_connect(int rc);
+     void on_disconnect(int rc);
+     void on_publish(int mid);
+     void on_subscribe(int mid, int qos_count, const int *granted_qos);
+     void on_message(const struct mosquitto_message *message);
+
+      RF24Network& _network;
+  };
+
+void handleIncomingRF24Msg(RF24Network &net, ArduiPi_OLED &dis);
 
 #endif 

@@ -26,19 +26,16 @@ endif
 # Detect the Raspberry Pi from cpuinfo
 #Count the matches for BCM2708 or BCM2709 in cpuinfo
 RPI=$(shell cat /proc/cpuinfo | grep Hardware | grep -c BCM2708)
+CCFLAGS=-Ofast -mfpu=vfp -mfloat-abi=hard -march=$(ARCH) -mtune=arm1176jzf-s -std=c++0x
 ifneq "${RPI}" "1"
 RPI=$(shell cat /proc/cpuinfo | grep Hardware | grep -c BCM2709)
-endif
-
-ifeq "$(RPI)" "1"
-# The recommended compiler flags for the Raspberry Pi
-CCFLAGS=-Ofast -mfpu=vfp -mfloat-abi=hard -march=$(ARCH) -mtune=arm1176jzf-s -std=c++0x
+CCFLAGS=-std=c++0x -Ofast -march=$(ARCH) -mtune=cortex-a7 -mfpu=neon-vfpv4 -mfloat-abi=hard  
 endif
 
 # define all programs
 PROGRAMS = automatond
 SOURCES = ${PROGRAMS:=.cpp}
-LIBS=-lb2 -lnnxx -lrf24-bcm -lrf24network -lArduiPi_OLED -I/root/libs/rapidjson/include -I/root/libs/base-n/include 
+LIBS=-lb2 -lnnxx -lmosquittopp -lrf24-bcm -lrf24network -lArduiPi_OLED -I/root/libs/rapidjson/include -I/root/libs/base-n/include 
 
 
 ${PROGRAMS}: ${SOURCES}
