@@ -1,10 +1,42 @@
 #include "automatond.h"
 
+
+
+
+// cout << "keys in config: " << jsonConfig.MemberCount() << endl;
+/*
+ static const char* kTypeNames[] = 
+    { "Null", "False", "True", "Object", "Array", "String", "Number" };
+for (Value::ConstMemberIterator itr = jsonConfig.MemberBegin();
+    itr != jsonConfig.MemberEnd(); ++itr)
+{
+    printf("Type of member %s is %s\n",
+        itr->name.GetString(), kTypeNames[itr->value.GetType()]);
+}
+*/  
+
 using namespace std;
+using namespace rapidjson;
 
 int main(int argc, char *argv[])
 {
- 
+  // create object to store config document
+  Document jsonConfig = getConfig("/.automatond.json");
+  // if we could open it we are good, if not close with err
+  if(jsonConfig.IsObject())
+  { 
+    int allKeys = 1;
+    string configKeys[] = {"ACL","MQTT_TOPIC", "MQTT_OUT", "MQTT_IN", "SECRET_KEY"};
+    for(const auto& configKey : configKeys) {
+       allKeys = jsonConfig.HasMember(configKey.c_str());
+    }
+    if(allKeys > 0){cout << "got all the config keys we need!" << endl;
+    } else {cout << "Invalid configuration file" << endl; return 1;}
+  } else {
+    // exit program with code 1
+    return 1;
+  }
+
   //variables to store cmdline params
   string this_node_id_arg;
   int daemonFlag = 0;
@@ -36,140 +68,40 @@ int main(int argc, char *argv[])
       }
   }
 
- 
-  uint16_t this_node_id_oct = 00;
-  // set non-default nodeId
-  if(this_node_id_arg.size() > 0){
-    std::istringstream(this_node_id_arg) >> std::oct >> this_node_id_oct; // make sure node id is octal, sent as string 
-  }
-  
-  uint8_t channel = 115;
-  // set non-default channel
-  if(channel_arg > 0 && channel_arg <= 125){
-    channel = (uint8_t)channel_arg;
-  } else if(channel_arg > 125 ) {
-    cout << "Invalid Channel - enter channel from 1-125" << endl;
-    return 0;
-  } 
-
-  rf24_pa_dbm_e paLevel = (rf24_pa_dbm_e)3;
-  // set non-default PaLevel
-  if(paLevel_arg > 0){
-    paLevel = (rf24_pa_dbm_e)paLevel_arg;
-  }
-
-   rf24_datarate_e dataRate = (rf24_datarate_e)0;
-  // set non-default dataRate
-   if(dataRate_arg > 0){
-    dataRate = (rf24_datarate_e)dataRate_arg;
-  } 
-
-  setlogmask(LOG_UPTO(LOG_NOTICE));
-  openlog(DAEMON_NAME, LOG_CONS | LOG_NDELAY | LOG_PERROR | LOG_PID, LOG_USER);
-
-  if(daemonFlag){
-    pid_t pid, sid;
-     //Fork the Parent Process
-    pid = fork();
-
-     if (pid < 0) { exit(EXIT_FAILURE); }
-
-      //We got a good pid, Close the Parent Process
-     if (pid > 0) { exit(EXIT_SUCCESS); }
-
-    //Change File Mask
-      umask(0);
-
-      //Create a new Signature Id for our child
-    sid = setsid();
-    if (sid < 0) { exit(EXIT_FAILURE); }
-
-      //Change Directory
-      //If we cant find the directory we exit with failure.
-     if ((chdir("/")) < 0) { exit(EXIT_FAILURE); }
-
-      //Close Standard File Descriptors
-      close(STDIN_FILENO);
-      close(STDOUT_FILENO);
-      close(STDERR_FILENO);
-
-    //logMsg("fork", "process_forked" , to_string(pid));
-  } 
-
-   Rf24Relay(this_node_id_oct, channel, dataRate, paLevel);
-}
-
-
-void Rf24Relay(uint16_t this_node_id, uint8_t channel, rf24_datarate_e dataRate, rf24_pa_dbm_e paLevel)
-{
-  long lastTime = time(0);
-
-  signal(SIGTERM, signalHandler);
-  signal(SIGINT, signalHandler);
-  string ipc_addr = "ipc:///tmp/rf24d.ipc";
-
-  logMsg("dataRate", to_string(dataRate), "config");
-  logMsg("paLevel", to_string(paLevel), "config");
-  logMsg("this_node_id", to_string(this_node_id), "config");
-  logMsg("channel", to_string(channel), "config");
-
-  logMsg("OK", "starting RF24d", "start_up");
-  
-  // start radio
   RF24 radio(22, 0);
   RF24Network network(radio);
 
-  // init display
-  ArduiPi_OLED display;
-  display.init(OLED_I2C_RESET, 3);
-  display.begin();
-  display.setTextSize(1);
-  display.setTextColor(WHITE);
-  display.setCursor(0,0);
-  display.print("Starting automatond!\n");
-  display.display();
+  ArduiRFMQTT relay("rf_relay", "localhost", 1883, network);
 
-  // create and connect nanomsg pair socket
-  nnxx::socket nn_sock { nnxx::SP, nnxx::PAIR };
-  nn_sock.connect(ipc_addr.c_str());
+  //string hashed = relay.genHash(testHash, false);
+  //string hashedEnc = relay.genHash(testHash, true);
+  //cout << hashed << endl; 
+  //cout << hashedEnc << endl; 
 
   if(radio.begin()){
-    radio.setDataRate(dataRate);
-    radio.setPALevel(paLevel);
-    radio.setChannel(channel);
-    delay(250);
-    if(network.is_valid_address(this_node_id)){
-      logMsg("network_begin", "with_node_id", to_string(this_node_id));
-      network.begin(this_node_id);
-      delay(100);
-      //start looping
-      sendHeartbeat(lastTime, network); // send heatbeat right away...
 
-      while (1){
-        network.update(); //keep network up
-        // handing incoming messages from nn socket to forward to RFnetwork
-        handleIncomingNNMsg(nn_sock, network);
-  
-        // handing incoming messages from RF24 network
-        if( network.available() ){   // we have a message from the sensor network
-          RF24NetworkHeader peekedHeader;
-          network.peek(peekedHeader);               // peak at the header so we know if it is a 0
-          handleIncomingRF24Msg(nn_sock, network, display);  // also forward the 0 but going to register this node and send a heatbeat for it
-          if(peekedHeader.type == 0){
-            sendHeartbeat(network);
-          }
-        } 
-         // send heart beat on regular interval
-        if(time(0) > (lastTime + HEARTBEAT_INTERVAL)){  sendHeartbeat(lastTime, network); }
-      
-      } // restart loop
-    } else {
-       logMsg("network_begin", "invalid node address");
+    radio.setChannel(115);
+    network.begin(00);
+    delay(100);
+
+    relay.sendHeartbeat();
+    // start looping
+    while(1)
+    {
+      network.update();  // keep RFNetwork up
+      relay.loop(0,1);   // keep MQTT relay up 0 second timeout
+
+      if( network.available() ){   // we have a message from the sensor network
+        relay.handleIncomingRF24Msg();  // also forward the 0 but going to register this node and send a heatbeat for it
+      }
+
+      if(time(0) > (relay.lastBeatSent() + HEARTBEAT_INTERVAL)){ relay.sendHeartbeat(); }
     }
-  } else {
-     logMsg("radio_begin", "rf24 radio begin, false");
   }
-} 
+
+  cout << "radio.begin failed!" << endl;
+  return 0;
+}
 
 
 static void show_usage(string name)
@@ -189,260 +121,333 @@ static void show_usage(string name)
 }
 
 
-
-using namespace rapidjson;
-using namespace std;
-
-#ifdef OLED_DEBUG
-  void writeToOLED(ArduiPi_OLED &dis, string stringToWrite, int x, int y)
+Document getConfig(const char* configPath)
+{
+  string userHome(getenv("HOME"));
+  string configFileAbsPath(userHome + configPath);
+  FILE* configFilep = fopen(configFileAbsPath.c_str(), "rb");  // open config json as file stream
+  Document jsonConfig;
+  if (configFilep != NULL) // if we could open
   {
-      dis.setCursor(x,y);
-      dis.print(stringToWrite.c_str());
-      dis.display();
-  }
-#endif
-
-
-
-void sendHeartbeat(long &last_time, RF24Network &net){
-  RF24NetworkHeader header(00, 5); // i dono send to self? what address for multicast
-  stringstream beat;
-  beat << time(0);
-  string beat_str(beat.str());
-  string signed_heartbeat = generateSignedPayload(beat_str);
-  char payload[signed_heartbeat.length()]; // max payload for rf24 network fragment, could be sent over multiple packets
-  strncpy(payload, signed_heartbeat.c_str(), signed_heartbeat.length()); // copy data into payload char, will probably segfault if over 144 char...
-  //heartbeat_pl heart = { time(0) }; 
-  payload[signed_heartbeat.length()] = '\0';
-  if(net.multicast(header, &payload, sizeof(payload), 1)){
-      cout << "sent heartbeat: "  << payload << endl;
-      last_time = time(0);//last time is re initialized
-   } else {
-     cout << "hmm multicast failed try again next loop..." << endl;
-   }
-}
-
-void sendHeartbeat(RF24Network &net){
-  RF24NetworkHeader header(00, 5); // i dono send to self? what address for multicast
-  stringstream beat;
-  beat << time(0);
-  string beat_str(beat.str());
-  string signed_heartbeat = generateSignedPayload(beat_str);
-  char payload[signed_heartbeat.length()]; // max payload for rf24 network fragment, could be sent over multiple packets
-  strncpy(payload, signed_heartbeat.c_str(), signed_heartbeat.length()); // copy data into payload char, will probably segfault if over 144 char...
-  //heartbeat_pl heart = { time(0) }; 
-  payload[signed_heartbeat.length()] = '\0';
-  if(net.multicast(header, &payload, sizeof(payload), 1)){
-      cout << "sent heartbeat after node registered: "  << payload << endl;
-   } else {
-     cout << "hmm multicast failed try again next loop..." << endl;
-   }
-}
-
-string generateSignedPayload(string msg_payload){
-    char pl_to_hash[msg_payload.length()];
-    strncpy(pl_to_hash, msg_payload.c_str(), msg_payload.size());
-    uint8_t hashout[DIGEST_SIZE];
-    blake2s(hashout, pl_to_hash, SECRET_KEY, DIGEST_SIZE, sizeof(pl_to_hash), sizeof(SECRET_KEY)); //generate hash of payload
-    stringstream hashHex;
-    for(int i=0; i< DIGEST_SIZE; i++){
-        hashHex << std::hex << +hashout[i];   // convert uint8_t bytes to hex chars
-    }
-    string HMAC(hashHex.str()); // create string object from hexchar string
-    cout << HMAC << endl; 
-    string encodedHMAC;
-    bn::encode_b64(HMAC.begin(), HMAC.end(), back_inserter(encodedHMAC));
-    cout << msg_payload << endl;
-    string encodedPL;
-    bn::encode_b64(msg_payload.begin(), msg_payload.end(), back_inserter(encodedPL));
-    cout << encodedPL << endl;
-    string fullPL(encodedPL + "." + encodedHMAC);
-    cout << fullPL << endl;
-    cout << fullPL.length() << endl;
-    return fullPL;
-}
-
-void logMsg(string info, string msg, string type){
-  Document log_msg;
-  log_msg.SetObject();
-  Document::AllocatorType& allocator = log_msg.GetAllocator();
-  log_msg.AddMember("info", Value(info.c_str(), info.size(), allocator).Move() , allocator);
-  log_msg.AddMember("type", Value(type.c_str(), type.size(), allocator).Move(), allocator);
-  log_msg.AddMember("msg", Value(msg.c_str(), msg.size(), allocator).Move(), allocator);
-
-  StringBuffer buffer;
-  Writer<StringBuffer> writer(buffer);
-  log_msg.Accept(writer);
-
-  syslog (LOG_NOTICE, buffer.GetString());
-}
-
-void sendBackErr(nnxx::socket &to, string error_for_ex)
-{
-  Document nn_out_err;
-  nn_out_err.SetObject();
-  Document::AllocatorType& allocator = nn_out_err.GetAllocator();
-  nn_out_err.AddMember("error",Value(error_for_ex.c_str(), error_for_ex.size(), allocator).Move(), allocator);
-  StringBuffer out_s_buf;
-  Writer<StringBuffer> writer(out_s_buf);
-  nn_out_err.Accept(writer);
-  to.send(out_s_buf.GetString(), nnxx::DONTWAIT);
-}
-
-void handleIncomingRF24Msg(nnxx::socket &nn_socket, RF24Network &net, ArduiPi_OLED &dis) //pass socket and network through as reference
-{
-  RF24NetworkHeader header; // create header
-  Document in_rf_msg;       // create document for incoming message
-  in_rf_msg.SetObject();  
-  Document::AllocatorType& allocator = in_rf_msg.GetAllocator();  // grab allocator
-  char payloadJ[120]; //max payload for rf24 network fragment, could be sent over multiple packets
-  size_t readP = net.read(header,&payloadJ, sizeof(payloadJ));
-  payloadJ[readP] ='\0';
-  //cout << payloadJ << endl;
-  string payloadStr(payloadJ); // create string object to strip nonsense off buffer
-  if(payloadStr.size() != readP){ payloadStr.resize(readP); } // resize payloadStr 
-  //cout << payloadStr << endl; 
-  //in_rf_msg.AddMember("msg_id", Value().SetInt(header.id) , allocator); 
-
-  std::size_t delim = payloadStr.find_first_of(".");
-  if(delim != string::npos){
-    string encodedMsg = payloadStr.substr(0, delim);
-    string encodedHash = payloadStr.substr(delim+1, payloadStr.length());
-
-    // find padding
-    int msgPadCount = count(encodedMsg.begin(), encodedMsg.end(), '='); 
-    int hashPadCount = count(encodedHash.begin(), encodedHash.end(), '='); 
-    
-    // decode b64 encoded string of msg, store it in a new string
-    string decodedMSG;
-    bn::decode_b64(encodedMsg.begin(), encodedMsg.end(), back_inserter(decodedMSG));
-    // resize string to remove any bad bytes left over from padding
-    decodedMSG.resize(decodedMSG.length()-msgPadCount);
-    
-    // decode b64 encoded string of hash, store it in a new string
-    string decodedHASH;
-    bn::decode_b64(encodedHash.begin(), encodedHash.end(), back_inserter(decodedHASH));
-    // resize string to remove any bad bytes left over from padding
-    decodedHASH.resize(decodedHASH.length()-hashPadCount);
-    // copy decoded msg into char* to hash ourselves.
-    char pl_to_test[decodedMSG.length()];
-    strncpy(pl_to_test, decodedMSG.c_str(), decodedMSG.length()+1); // grab null byte.
-    
-     
-    uint8_t hashout[DIGEST_SIZE];
-    blake2s(hashout, pl_to_test, SECRET_KEY, DIGEST_SIZE, strlen(pl_to_test), sizeof(SECRET_KEY)); //generate hash of payload
-    stringstream hashHex;
-    for(int i=0; i< DIGEST_SIZE; i++){
-        hashHex << std::hex << +hashout[i];   // convert uint8_t bytes to hex chars
-    }
-    // create string object from hashHex stringstream
-    string msgHash(hashHex.str()); 
-    // test if delivered hash and our version of hash match
-    if(decodedHASH == msgHash){
-      cout << "Valid message!" << endl;
-      cout << decodedMSG << endl;
-
-      StringStream s(decodedMSG.c_str());
-      Document d;
-      d.ParseStream(s);
-        unsigned long beatFromMsg = 0;
-        unsigned long myBeat = time(0);
-
-      if(d.IsObject()){
-        cout << "JSON object recieved!" << endl;
-          beatFromMsg = d["hb"].GetInt();
-
-      } else if(d.IsArray()){
-        beatFromMsg = d[3].GetInt();
-      } else {
-         cout << "not a json array or object:(" << endl;
-      }
-        unsigned int diff = myBeat - beatFromMsg;
-        //1 second margin of error on time, seems to be working pretty well
-        if( diff <= 1){
-          std::ostringstream beatMsg;
-          beatMsg << " My Beat: " << myBeat << "\nMsg Beat: " << beatFromMsg << "\nDiff: " << diff << "\nFrom : " << std::oct << header.from_node;
-          cout << beatMsg << endl;
-          #ifdef OLED_DEBUG
-            string forOled = beatMsg.str();
-            dis.clearDisplay();
-            writeToOLED(dis, forOled, 0, 0);
-            writeToOLED(dis, decodedMSG.c_str(), 0, 48);
-          #endif
-
-          // send it over nn socket
-          in_rf_msg.AddMember("from_node", Value().SetInt(header.from_node) , allocator); // add integer to incoming msg json: from_node
-          in_rf_msg.AddMember("type", Value().SetInt(header.type), allocator);            // add integer to incoming msg json: type 
-          in_rf_msg.AddMember("msg", Value(decodedMSG.c_str(), decodedMSG.size(), allocator).Move(), allocator);
-          //write json to string
-          StringBuffer buffer;
-          Writer<StringBuffer> writer(buffer);
-          in_rf_msg.Accept(writer);
-          // send validated msg over nn socket
-          int sentBytes = nn_socket.send(buffer.GetString(), nnxx::DONTWAIT);
-          if(sentBytes > 0){ //log
-              logMsg("sent", buffer.GetString(), "to_nn");                  
-          }
-        }
-
-
-
-    } else {
-      cout << "Invalid message!! :(" << endl;
-      cout << decodedMSG << endl;
-    }
-  }
-}
-
-void handleIncomingNNMsg(nnxx::socket &nn_socket, RF24Network &net) //pass socket and network through as reference
-{
-  try {
-    stringstream errMsg;
-    nnxx::message_istream msg { nn_socket.recv(nnxx::DONTWAIT) }; //try and grab message
-    std::string msg_str(std::istream_iterator<char>(msg), {});  // turn whatever we got into a string
-    if(msg_str.size() > 0 ){  // if we acually got something, size > 0
-      Document nn_in_msg; // create doc to store message if its a json
-      try {
-        if (nn_in_msg.Parse(msg_str.c_str()).HasParseError() == false){ // we have a json    
-          uint16_t to_node_id_oct;      
-          std::istringstream(nn_in_msg["to_node"].GetString()) >> std::oct >> to_node_id_oct; // make sure node id is octal, sent as string 
-          if(net.is_valid_address(to_node_id_oct)){   // only send if we have a valid address
-            string msgPayload(nn_in_msg["msg"].GetString());      //grab payload put it in a string
-            string signedPayload = generateSignedPayload(msgPayload);
-            unsigned char msg_type = nn_in_msg["type"].GetInt();  // grap message type as unsigned char 
-            char payload[signedPayload.length()]; // max payload for rf24 network fragment, could be sent over multiple packets
-            strncpy(payload, signedPayload.c_str(), signedPayload.length()); // copy data into payload char, will probably segfault if over 144 char...
-            RF24NetworkHeader header( to_node_id_oct , msg_type ); //create RF24Network header
-            size_t bytesSent = net.write(header, &payload, sizeof(payload));
-            if (bytesSent > 0) {
-              logMsg(to_string(msg_type), to_string(to_node_id_oct), "to_rf24");
-            } else { 
-              errMsg << "FAILED_TO_NODE: " << to_node_id_oct;
-              throw errMsg.str();
-            }      
-          } else {
-            errMsg << "INVALID_RF24_ADDR " << to_node_id_oct;
-            throw errMsg.str();
-          }  
-        } else {
-          errMsg << "RAPID_JSON_PARSE_ERROR: " << msg_str;
-          throw errMsg.str();
-        }      
-      } catch(string &e){ // catch RF24d errors
-        sendBackErr(nn_socket, e);
-        logMsg("RF24d_ERR", e);
-      }   
+    cout << "Opened configFile: " << configFileAbsPath << endl;
+    char readBuffer[3000];
+    FileReadStream configFileStream(configFilep, readBuffer, sizeof(readBuffer));
+    if (jsonConfig.ParseStream(configFileStream).HasParseError()) {
+          fprintf(stderr, "\nError(offset %u): %s\n", 
+        (unsigned)jsonConfig.GetErrorOffset(),
+        GetParseError_En(jsonConfig.GetParseError()));
     } 
-  } catch(const std::system_error &e) { // catch nn errors
-    std::cerr << e.what() << std::endl;
+  } else {
+     cerr << "Could not open config file: " << configFileAbsPath << endl;
   }
+  fclose(configFilep);
+  return jsonConfig;
+}
+
+long ArduiRFMQTT::lastBeatSent()
+{
+  return this->last_beat;
+}
+
+ArduiRFMQTT::ArduiRFMQTT(const char * _id, const char * _host, int _port, RF24Network& network) : mosquittopp(_id), _network(network)
+ {
+   mosqpp::lib_init();        // Mandatory initialization for mosquitto library
+   this->keepalive = 60;    // Basic configuration setup for myMosq class
+   this->id = _id;
+   this->port = _port;
+   this->host = _host;
+   connect(host, port, keepalive);
+ };
+
+
+ArduiRFMQTT::~ArduiRFMQTT() {
+ loop_stop();            // Kill the thread
+ mosqpp::lib_cleanup();    // Mosquitto library cleanup
+ }
+
+
+bool ArduiRFMQTT::send_message(uint8_t from_node, const  char * _message)
+ {
+  stringstream topic;
+  topic << "/rf24/out/" << oct << from_node;
+  string topic_str(topic.str());
+  
+  cout << "SendingMessage: " <<  _message <<  endl;
+  cout << "OnTopic: " << topic_str << endl;
+ // Send message - depending on QoS, mosquitto lib managed re-submission this the thread
+ //
+ // * NULL : Message Id (int *) this allow to latter get status of each message
+ // * topic : topic to be used
+ // * lenght of the message
+ // * message
+ // * qos (0,1,2)
+ // * retain (boolean) - indicates if message is retained on broker or not
+ // Should return MOSQ_ERR_SUCCESS
+ int ret = publish(NULL,topic_str.c_str(),strlen(_message),_message,1,false);
+ return ( ret == MOSQ_ERR_SUCCESS );
+ }
+
+
+void ArduiRFMQTT::on_disconnect(int rc) {
+ std::cout << "ArduiRFMQTT - disconnection(" << rc << ")" << std::endl;
+ }
+
+ void ArduiRFMQTT::on_connect(int rc)
+ {
+ if ( rc == 0 ) {
+   std::cout << "ArduiRFMQTT - connected with server" << std::endl;
+   subscribe(NULL, "/rf24/to/+");
+ } else {
+ std::cout << "ArduiRFMQTT - Impossible to connect with server(" << rc << ")" << std::endl;
+ }
+ }
+
+ void ArduiRFMQTT::on_publish(int mid)
+ {
+ std::cout << "ArduiRFMQTT - Message (" << mid << ") succeed to be published " << std::endl;
+ }
+
+ void ArduiRFMQTT::on_subscribe(int mid, int qos_count, const int *granted_qos)
+{
+  std::cout << "Subscription succeeded." << std::endl;
 }
 
 
-
-void signalHandler( int signum )
+void ArduiRFMQTT::on_message(const struct mosquitto_message *message)
 {
-  syslog (LOG_NOTICE, "Closing RF24d!");
-  closelog ();
-  exit(signum);  
+  std::cout << "Got a message for RF24Network!" << std::endl;
+  string msg_topic(message->topic);
+  msg_topic.erase(0,1);// get rid of leading / 
+  size_t root_topic_pos = msg_topic.find_first_of("/");
+  // find last period, which designates beggining of MAC
+  size_t node_addr_pos = msg_topic.find_last_of("/");
+  string node_addr_str = msg_topic.substr(node_addr_pos+1, msg_topic.length());
+  uint8_t node_addr = stoi(node_addr_str, nullptr, 8);
+  string root_topic_str = msg_topic.substr(0, root_topic_pos);
+
+  if(_network.is_valid_address(node_addr))
+  { 
+    cout << "valid address! " << static_cast<int>(node_addr) << endl; 
+    cout << "root topic: " << root_topic_str << endl; 
+    // buffer to send over network
+    char payload_chars[message->payloadlen+1];
+    // copy payload to it?
+    memcpy(payload_chars,message->payload,message->payloadlen);
+    payload_chars[message->payloadlen] = '\0';
+    // create string to encode and sign.
+    string payloadToEncode(payload_chars);
+    std::cout << "To encode: " << std::endl;
+    std::cout << payloadToEncode << std::endl;
+    // encode and sign
+    string encodedAndSignedPL = genPayload(payloadToEncode);
+    std::cout << "Encoded: " << std::endl;
+    std::cout << encodedAndSignedPL << std::endl;
+
+    size_t payload_size = encodedAndSignedPL.length();
+    // RF24Network defaults to max 144byte payloads, make sure we dont try to send those..
+    if(payload_size <= MAX_PAYLOAD_LEN){
+      // need to be able to change message type, only the one for now...
+      RF24NetworkHeader header(node_addr, 65); 
+      char payload_for_rf24[payload_size]; 
+      // copy data into payload_for_rf24 buffer
+      strncpy(payload_for_rf24, encodedAndSignedPL.c_str(), payload_size); 
+      // send on RFNetwork.
+      if(_network.write(header, &payload_for_rf24, payload_size))
+       {
+        cout << "sent payload: " << payloadToEncode << endl;
+        cout << "to node:  0" << static_cast<int>(node_addr) << endl;
+        cout << "encoded payload size: " << payload_size << endl;
+       } else {
+        cout << "Failed sending payload: " << payloadToEncode << endl;
+        cout << "to node:  0" << static_cast<int>(node_addr) << endl;
+        cout << "encoded payload size: " << payload_size << endl;
+       }
+    }  else {
+        cout << "Failed sending payload: " << payloadToEncode << endl;
+        cout << "to node:  0" << static_cast<int>(node_addr) << endl;
+        cout << "encoded payload size: " << payload_size << endl;
+    }
+  }
+}
+
+void ArduiRFMQTT::handleIncomingRF24Msg() //pass socket and network through as reference
+{
+  // create header object to store incoming header
+  RF24NetworkHeader header;
+  //max payload for rf24 network fragment, could be sent over multiple packets
+  char incoming_msg_buf[144]; 
+  // read RF24Network fragment, store it in incoming_msg_buf
+  size_t readP = this->_network.read(header,&incoming_msg_buf, sizeof(incoming_msg_buf));
+  incoming_msg_buf[readP] ='\0';
+  // grab my time right after reading network fragment...
+  long myBeat = time(0);
+  cout << "got payload from rf!: " << incoming_msg_buf << endl;
+  cout << "from node: 0" << oct << header.from_node << endl;
+  cout << "of type: " << static_cast<int>(header.type) << endl;
+  //cout << incoming_msg_buf << endl;
+  // create string object to strip nonsense off buffer
+  string payloadStr(incoming_msg_buf); 
+  // resize payloadStr 
+  if(payloadStr.size() != readP){ payloadStr.resize(readP); } 
+  // find first period to determine header length, probably unesseary - should be 16
+  size_t HEADER_LEN = payloadStr.find_first_of(".");
+  // find last period, which designates beggining of MAC
+  size_t MAC_POS = payloadStr.find_last_of(".");
+  // grab MAC from end of payloadStr, store in encodedMAC
+  string encodedMAC = payloadStr.substr(MAC_POS+1, payloadStr.length());
+  // grab header+payload to hash
+  string signedPL = payloadStr.substr(0, MAC_POS);
+  // copy string to hash into tempbuf to be destroyed by hashing process, pretty sure...
+  char signedPL_TO_HASH[signedPL.length()+1];
+  signedPL.copy(signedPL_TO_HASH, signedPL.length(), 0);
+  signedPL_TO_HASH[signedPL.length()] = '\0';
+  // decode the MAC
+  string decodedMAC = this->decode_b64(encodedMAC);
+  // generate MAC of message
+  uint8_t hashout[DIGEST_SIZE];
+  //generate hash of payload
+  blake2s(hashout, signedPL_TO_HASH, SECRET_KEY, DIGEST_SIZE, strlen(signedPL_TO_HASH), sizeof(SECRET_KEY)); 
+  stringstream hashHex;
+  for(int i=0; i< DIGEST_SIZE; i++){
+     // convert uint8_t bytes to hex chars
+     hashHex << std::hex << +hashout[i];   
+  }
+  // create string object from hashHex stringstream
+  string msgHash(hashHex.str()); 
+  // test if delivered hash and our version of hash match
+  if(decodedMAC == msgHash){
+    // slice up payload into a string for encoded header, and one for encoded payload 
+    string encodedBEAT = payloadStr.substr(0, HEADER_LEN);
+    string encodedMSG = payloadStr.substr(HEADER_LEN+1, (payloadStr.length()-(HEADER_LEN+encodedMAC.length()+2)));
+    // decode msg beat to test if it aligns with our beat
+    string decodedBEAT = this->decode_b64(encodedBEAT);
+    // convert str to long
+    long beatFromMsg = atol(decodedBEAT.c_str());
+    printf("Beat from MSG: %ld\n", beatFromMsg);
+    printf("My beat: %ld\n", myBeat);
+    // test difference in time of beats
+    long diff = (myBeat - beatFromMsg);
+    // allow for one second of sway
+    if(diff <= 1)
+    { 
+      // we know it is a valid message, time to decode and send over MQTT
+      string decodedMSG = this->decode_b64(encodedMSG);
+      cout << "Got a valid message: " << decodedMSG << endl; 
+    } else {
+      cerr << "Invalid message beat!" << endl;
+      cout << "from node: 0" << oct << header.from_node << endl;
+      cout << "of type: " << static_cast<int>(header.type) << endl;
+    }    
+  } else {
+    cerr << "Invalid MAC!" << endl;
+    cout << "from node: 0" << oct << header.from_node << endl;
+    cout << "of type: " << static_cast<int>(header.type) << endl;
+  }   
+}
+
+string ArduiRFMQTT::genHash(string toHash, bool encoded)
+{
+    uint8_t hashout[DIGEST_SIZE];
+    blake2s(hashout, toHash.c_str(), SECRET_KEY, DIGEST_SIZE, toHash.length(), sizeof(SECRET_KEY)); //generate hash of payload
+    stringstream hashHex;
+    for(int i=0; i< DIGEST_SIZE; i++){
+      // convert uint8_t bytes to hex chars
+      hashHex << std::hex << +hashout[i];   
+    }
+    string MAC(hashHex.str());
+    string returnVal = (encoded) ? this->encode_b64(MAC) : MAC;
+    return returnVal;
+}
+
+string ArduiRFMQTT::genPayload(std::string payload_msg)
+{
+  long beat = time(0);
+  stringstream payloadBeatSS;
+  // convert beat to string
+  payloadBeatSS << beat;
+  // encode beat
+  string encodedBeatStr = this->encode_b64(payloadBeatSS.str());
+  // encode payload_msg
+  string encodedPLStr = this->encode_b64(payload_msg);
+  // create new string to hash,
+  string toHash = encodedBeatStr +"."+ encodedPLStr;
+  // generate hash
+  string encodedHMAC = genHash(toHash);
+  // build full payload
+  string fullPL(toHash + "." +  encodedHMAC);
+  cout << "Generated payload: " << endl; 
+  cout << fullPL << endl; 
+  return fullPL;
+}
+
+string ArduiRFMQTT::genPayload()
+{
+  long beat = time(0);
+  stringstream payloadBeatSS;
+  // convert beat to string
+  payloadBeatSS << beat;
+  // enncode beat
+  string encodedBeatStr = this->encode_b64(payloadBeatSS.str());
+  string toHash = encodedBeatStr +"."+ encodedBeatStr;
+  string encodedHMAC = genHash(toHash);
+  string fullPL(toHash + "." +  encodedHMAC);
+  cout << "Generated heartbeat: " << endl; 
+  cout << fullPL << endl; 
+  return fullPL;
+}
+
+void ArduiRFMQTT::sendHeartbeat(){
+  // i dono send to self? what address for multicast
+  RF24NetworkHeader header(00, 5); 
+  // genPayload with no params will create a heartbeat payload.
+  string fullPL = this->genPayload();
+  char payload[fullPL.length()]; // max payload for rf24 network fragment, could be sent over multiple packets
+  strncpy(payload, fullPL.c_str(), fullPL.length()); // copy data into payload char, will probably segfault if over 144 char...
+  //heartbeat_pl heart = { time(0) }; 
+  payload[fullPL.length()] = '\0';
+  if(_network.multicast(header, &payload, fullPL.length(), 1)){
+      long sent_beat = time(0);
+      cout << "sent heartbeat: "  << sent_beat << endl;
+      this->last_beat = sent_beat;
+   } else {
+     cout << "hmm multicast failed try again next loop..." << endl;
+   }
+}
+
+string ArduiRFMQTT::encode_b64(string to_encode)
+{
+  string encoded; 
+  CryptoPP::Base64Encoder encoder;
+
+  encoder.Put( (byte*)to_encode.data(), to_encode.size() );
+  encoder.MessageEnd();
+
+  CryptoPP::word64 size = encoder.MaxRetrievable();
+  if(size && size <= SIZE_MAX)
+  {
+     encoded.resize(size);   
+     encoder.Get((byte*)encoded.data(), encoded.size());
+  }
+  // remove new line from base64, gonna be appending it to other strings...
+  encoded.erase(std::remove(encoded.begin(), encoded.end(), '\n'), encoded.end());
+  return encoded;
+}
+
+
+string ArduiRFMQTT::decode_b64(string to_decode)
+{
+  string decoded; 
+  CryptoPP::Base64Decoder decoder;
+
+  decoder.Put( (byte*)to_decode.data(), to_decode.size() );
+  decoder.MessageEnd();
+
+  CryptoPP::word64 size = decoder.MaxRetrievable();
+  if(size && size <= SIZE_MAX)
+  {
+      decoded.resize(size);   
+      decoder.Get((byte*)decoded.data(), decoded.size());
+  }
+
+  return decoded;
 }
