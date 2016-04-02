@@ -3,26 +3,8 @@
   
   #include "automatond_config.h"
 
-
-
-#include <mosquitto.h>
-#include <mosquittopp.h>
-  
-  //json
-  #include "rapidjson/document.h"
-  #include "rapidjson/writer.h"
-  #include "rapidjson/stringbuffer.h"
-  #include "rapidjson/error/en.h"
-  
-  //hashing and encoding
-  #include <blake2.h>
-  #include "basen.hpp" 
-  
-  //rf24
-  #include <RF24/RF24.h>
-  #include <RF24Network/RF24Network.h>
-  
   // stdlib etc
+ #include <stdbool.h>
   #include <algorithm> 
   #include <functional> 
   #include <ctime>
@@ -45,6 +27,25 @@
   #include <getopt.h> 
  #include <typeinfo>
   
+// mqtt
+#include <mosquitto.h>
+#include <mosquittopp.h>
+  
+  //json
+  #include "rapidjson/document.h"
+  #include "rapidjson/writer.h"
+  #include "rapidjson/stringbuffer.h"
+  #include "rapidjson/error/en.h"
+  
+  //hashing and encoding
+  #include <blake2.h>
+  #include <cryptopp/base64.h>
+
+  //rf24
+  #include <RF24/RF24.h>
+  #include <RF24Network/RF24Network.h>
+  
+
   #ifdef OLED_DEBUG
     #include "ArduiPi_OLED_lib.h"
     #include "Adafruit_GFX.h"
@@ -75,14 +76,22 @@
       ArduiRFMQTT(const char *id, const char *host, int port, RF24Network& network);
       ~ArduiRFMQTT();
       bool send_message(uint8_t from_node, const char * _message);
-      unsigned long lastBeatSent();
-      std::string generateSignedPayload(std::string msg_payload);
+      long lastBeatSent();
+
+      std::string genPayload();
+      std::string genPayload(std::string);
       void sendHeartbeat();
+      std::string constructPayload(std::string msg, bool beat = false);
+      std::string genHash(std::string, bool encoded = true);
+      std::string encode_b64(std::string);
+      std::string decode_b64(std::string);
+      void handleIncomingRF24Msg();
+      
 
     private:
-     std::vector<node> node_list;
+     std::vector<node> node_list;   
      
-     unsigned long last_beat;
+     long last_beat;
      const char     *     host;
      const char    *     id;
      int                port;
@@ -92,10 +101,9 @@
      void on_publish(int mid);
      void on_subscribe(int mid, int qos_count, const int *granted_qos);
      void on_message(const struct mosquitto_message *message);
-
-      RF24Network& _network;
+     RF24Network& _network;
   };
 
-void handleIncomingRF24Msg(RF24Network &net, ArduiPi_OLED &dis);
+
 
 #endif 

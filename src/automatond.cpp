@@ -42,43 +42,34 @@ int main(int argc, char *argv[])
 
   ArduiRFMQTT relay("rf_relay", "localhost", 1883, network);
 
- if(radio.begin()){
+  //string hashed = relay.genHash(testHash, false);
+  //string hashedEnc = relay.genHash(testHash, true);
+  //cout << hashed << endl; 
+  //cout << hashedEnc << endl; 
 
-  radio.setChannel(115);
-  network.begin(00);
-  delay(100);
+  if(radio.begin()){
 
-  relay.sendHeartbeat();
- }
+    radio.setChannel(115);
+    network.begin(00);
+    delay(100);
 
+    relay.sendHeartbeat();
+    // start looping
     while(1)
     {
-    network.update();  
-    relay.loop(0,1);
+      network.update();  // keep RFNetwork up
+      relay.loop(0,1);   // keep MQTT relay up 0 second timeout
 
-   if( network.available() ){   // we have a message from the sensor network
-        RF24NetworkHeader header;
-        network.peek(header);
-        char payloadJ[120]; //max payload for rf24 network fragment, could be sent over multiple packets
-        size_t readP = network.read(header,&payloadJ, sizeof(payloadJ));
-        payloadJ[readP] ='\0';
-        cout << "got payload from rf!: " << payloadJ << endl;
-        cout << "from node: " << oct << header.from_node << endl;
-        cout << "of type: " << static_cast<int>(header.type) << endl;
-        uint8_t rawSize = 0;
-        unsigned long hb;
-       // handleIncomingRF24Msg(nn_sock, network);  // also forward the 0 but going to register this node and send a heatbeat for it
-        if(header.type == 0){
-         // sendHeartbeat(network);
-        }
+      if( network.available() ){   // we have a message from the sensor network
+        relay.handleIncomingRF24Msg();  // also forward the 0 but going to register this node and send a heatbeat for it
+      }
+
+      if(time(0) > (relay.lastBeatSent() + HEARTBEAT_INTERVAL)){ relay.sendHeartbeat(); }
     }
-
-  if(time(0) > (relay.lastBeatSent() + HEARTBEAT_INTERVAL)){ relay.sendHeartbeat(); }
-  
-
-
   }
- return 0;
+
+  cout << "radio.begin failed!" << endl;
+  return 0;
 }
 
 
@@ -99,7 +90,7 @@ static void show_usage(string name)
 }
 
 
-unsigned long ArduiRFMQTT::lastBeatSent()
+long ArduiRFMQTT::lastBeatSent()
 {
   return this->last_beat;
 }
@@ -144,7 +135,7 @@ bool ArduiRFMQTT::send_message(uint8_t from_node, const  char * _message)
 
 
 void ArduiRFMQTT::on_disconnect(int rc) {
- std::cout << ">> myMosq - disconnection(" << rc << ")" << std::endl;
+ std::cout << "ArduiRFMQTT - disconnection(" << rc << ")" << std::endl;
  }
 
  void ArduiRFMQTT::on_connect(int rc)
@@ -174,159 +165,178 @@ void ArduiRFMQTT::on_message(const struct mosquitto_message *message)
   memcpy(payload_chars,message->payload,message->payloadlen);
 
   string payloadToEncode(payload_chars);
-  string encodedAndSignedPL = generateSignedPayload(payloadToEncode);
+  string encodedAndSignedPL = genPayload(payloadToEncode);
 
 
   std::cout << "Got a message!" << std::endl;
   std::cout << message->topic << std::endl;
   std::cout << message->payloadlen << std::endl;
   std::cout << payloadToEncode << std::endl;
-  std::cout << encodedAndSignedPL << std::endl;
+  //std::cout << encodedAndSignedPL << std::endl;
 }
 
-void handleIncomingRF24Msg(RF24Network &net, ArduiPi_OLED &dis) //pass socket and network through as reference
+void ArduiRFMQTT::handleIncomingRF24Msg() //pass socket and network through as reference
 {
   RF24NetworkHeader header; // create header
   char payloadJ[120]; //max payload for rf24 network fragment, could be sent over multiple packets
-  uint8_t rawSize = 0;
   unsigned long hb;
-  size_t readP = net.read(header,&payloadJ, sizeof(payloadJ));
-  std::memcpy(&rawSize, payloadJ, 1);     //first byte raw pl size; 
-  std::memcpy(&hb, payloadJ+1, 10);  //next 10 bytes have heartbeat
-
+  size_t readP = this->_network.read(header,&payloadJ, sizeof(payloadJ));
   payloadJ[readP] ='\0';
+  cout << "got payload from rf!: " << payloadJ << endl;
+  cout << "from node: " << oct << header.from_node << endl;
+  cout << "of type: " << static_cast<int>(header.type) << endl;
   //cout << payloadJ << endl;
   string payloadStr(payloadJ); // create string object to strip nonsense off buffer
   if(payloadStr.size() != readP){ payloadStr.resize(readP); } // resize payloadStr 
-  //cout << payloadStr << endl; 
-  //in_rf_msg.AddMember("msg_id", Value().SetInt(header.id) , allocator); 
-
-  std::size_t delim = payloadStr.find_first_of(".");
-  if(delim != string::npos){
-    string encodedMsg = payloadStr.substr(0, delim);
-    string encodedHash = payloadStr.substr(delim+1, payloadStr.length());
-
-    // find padding
-    int msgPadCount = count(encodedMsg.begin(), encodedMsg.end(), '='); 
-    int hashPadCount = count(encodedHash.begin(), encodedHash.end(), '='); 
-    
-    // decode b64 encoded string of msg, store it in a new string
-    string decodedMSG;
-    bn::decode_b64(encodedMsg.begin(), encodedMsg.end(), back_inserter(decodedMSG));
-    // resize string to remove any bad bytes left over from padding
-    decodedMSG.resize(decodedMSG.length()-msgPadCount);
-    
-    // decode b64 encoded string of hash, store it in a new string
-    string decodedHASH;
-    bn::decode_b64(encodedHash.begin(), encodedHash.end(), back_inserter(decodedHASH));
-    // resize string to remove any bad bytes left over from padding
-    decodedHASH.resize(decodedHASH.length()-hashPadCount);
-    // copy decoded msg into char* to hash ourselves.
-    char pl_to_test[decodedMSG.length()];
-    strncpy(pl_to_test, decodedMSG.c_str(), decodedMSG.length()+1); // grab null byte.
-    
-     
-    uint8_t hashout[DIGEST_SIZE];
-    blake2s(hashout, pl_to_test, SECRET_KEY, DIGEST_SIZE, strlen(pl_to_test), sizeof(SECRET_KEY)); //generate hash of payload
-    stringstream hashHex;
-    for(int i=0; i< DIGEST_SIZE; i++){
-        hashHex << std::hex << +hashout[i];   // convert uint8_t bytes to hex chars
-    }
+  std::size_t HEADER_LEN = payloadStr.find_first_of(".");
+  std::size_t MAC_POS = payloadStr.find_last_of(".");
+  string encodedMAC = payloadStr.substr(MAC_POS+1, payloadStr.length());
+  string signedPL = payloadStr.substr(0, MAC_POS);
+  cout << "Signed encoded PL" << endl;
+  cout << signedPL << endl;
+  char signedPL_TO_HASH[signedPL.length()+1];
+  signedPL.copy(signedPL_TO_HASH, signedPL.length(), 0);
+  signedPL_TO_HASH[signedPL.length()] = '\0';
+  string decodedMAC = this->decode_b64(encodedMAC);
+  uint8_t hashout[DIGEST_SIZE];
+  blake2s(hashout, signedPL_TO_HASH, SECRET_KEY, DIGEST_SIZE, strlen(signedPL_TO_HASH), sizeof(SECRET_KEY)); //generate hash of payload
+  stringstream hashHex;
+  for(int i=0; i< DIGEST_SIZE; i++){
+     hashHex << std::hex << +hashout[i];   // convert uint8_t bytes to hex chars
+  }
     // create string object from hashHex stringstream
-    string msgHash(hashHex.str()); 
-    // test if delivered hash and our version of hash match
-    if(decodedHASH == msgHash){
-      cout << "Valid message!" << endl;
-      cout << decodedMSG << endl;
-
-      StringStream s(decodedMSG.c_str());
-      Document d;
-      d.ParseStream(s);
-        unsigned long beatFromMsg = 0;
-        unsigned long myBeat = time(0);
-
-      if(d.IsObject()){
+  string msgHash(hashHex.str()); 
+     // test if delivered hash and our version of hash match
+  if(decodedMAC == msgHash){
+    string encodedBEAT = payloadStr.substr(0, HEADER_LEN);
+    string encodedMSG = payloadStr.substr(HEADER_LEN+1, (payloadStr.length()-(HEADER_LEN+encodedMAC.length()+2)));
+    string decodedBEAT = this->decode_b64(encodedBEAT);
+    string decodedMSG = this->decode_b64(encodedMSG);
+    StringStream s(decodedMSG.c_str());
+    Document d;
+    d.ParseStream(s);
+    long beatFromMsg = atol(decodedBEAT.c_str());
+    long myBeat = time(0);
+    printf("Beat from MSG: %ld\n", beatFromMsg);
+    printf("My beat: %ld\n", myBeat);
+     
+    if(d.IsObject()){
         cout << "JSON object recieved!" << endl;
-          beatFromMsg = d["hb"].GetInt();
-
-      } else if(d.IsArray()){
-        beatFromMsg = d[3].GetInt();
-      } else {
-         cout << "not a json array or object:(" << endl;
-      }
-        unsigned int diff = myBeat - beatFromMsg;
-        //1 second margin of error on time, seems to be working pretty well
-        if( diff <= 1){
-          std::ostringstream beatMsg;
-          beatMsg << " My Beat: " << myBeat << "\nMsg Beat: " << beatFromMsg << "\nDiff: " << diff << "\nFrom : " << std::oct << header.from_node;
-          cout << beatMsg << endl;
-          #ifdef OLED_DEBUG
-           // string forOled = beatMsg.str();
-           // dis.clearDisplay();
-           // writeToOLED(dis, forOled, 0, 0);
-          //  writeToOLED(dis, decodedMSG.c_str(), 0, 48);
-          #endif
-
-          Document in_rf_msg;       // create document for incoming message
-          in_rf_msg.SetObject();  
-          Document::AllocatorType& allocator = in_rf_msg.GetAllocator();  // grab allocator
-          // send it over nn socket
-          in_rf_msg.AddMember("from_node", Value().SetInt(header.from_node) , allocator); // add integer to incoming msg json: from_node
-          in_rf_msg.AddMember("type", Value().SetInt(header.type), allocator);            // add integer to incoming msg json: type 
-          in_rf_msg.AddMember("msg", Value(decodedMSG.c_str(), decodedMSG.size(), allocator).Move(), allocator);
-          //write json to string
-          StringBuffer buffer;
-          Writer<StringBuffer> writer(buffer);
-          in_rf_msg.Accept(writer);
-          // send validated msg over nn socket
-        }
-
+    } else if(d.IsArray()){
+        cout << "JSON array recieved!" << endl;
     } else {
-      cout << "Invalid message!! :(" << endl;
-      cout << decodedMSG << endl;
+         cout << "not a json array or object:(" << endl;
     }
+      
   }
 }
 
-
-string ArduiRFMQTT::generateSignedPayload(string msg_payload){
-    char pl_to_hash[msg_payload.length()];
-    strncpy(pl_to_hash, msg_payload.c_str(), msg_payload.size());
+string ArduiRFMQTT::genHash(string toHash, bool encoded)
+{
     uint8_t hashout[DIGEST_SIZE];
-    blake2s(hashout, pl_to_hash, SECRET_KEY, DIGEST_SIZE, sizeof(pl_to_hash), sizeof(SECRET_KEY)); //generate hash of payload
+    blake2s(hashout, toHash.c_str(), SECRET_KEY, DIGEST_SIZE, toHash.length(), sizeof(SECRET_KEY)); //generate hash of payload
     stringstream hashHex;
     for(int i=0; i< DIGEST_SIZE; i++){
-        hashHex << std::hex << +hashout[i];   // convert uint8_t bytes to hex chars
+      hashHex << std::hex << +hashout[i];   // convert uint8_t bytes to hex chars
     }
-    string HMAC(hashHex.str()); // create string object from hexchar string
-    cout << HMAC << endl; 
-    string encodedHMAC;
-    bn::encode_b64(HMAC.begin(), HMAC.end(), back_inserter(encodedHMAC));
-    cout << msg_payload << endl;
-    string encodedPL;
-    bn::encode_b64(msg_payload.begin(), msg_payload.end(), back_inserter(encodedPL));
-    cout << encodedPL << endl;
-    string fullPL(encodedPL + "." + encodedHMAC);
-    cout << fullPL << endl;
-    cout << fullPL.length() << endl;
-    return fullPL;
+    string MAC(hashHex.str());
+    if(encoded){ 
+      string encMAC = this->encode_b64(MAC);
+      return encMAC;
+    } else {
+      return MAC;
+    } 
+}
+
+string ArduiRFMQTT::genPayload(std::string payload_msg)
+{
+  long beat = time(0);
+  stringstream payloadBeatSS;
+  // convert beat to string
+  payloadBeatSS << beat;
+  // encode beat
+  string encodedBeatStr = this->encode_b64(payloadBeatSS.str());
+  // encode payload_msg
+  string encodedPLStr = this->encode_b64(payload_msg);
+  // create new string to hash,
+  string toHash = encodedBeatStr +"."+ encodedPLStr;
+  // generate hash
+  string encodedHMAC = genHash(toHash);
+  // build full payload
+  string fullPL(toHash + "." +  encodedHMAC);
+  cout << "Generated payload: " << endl; 
+  cout << fullPL << endl; 
+  return fullPL;
+}
+
+string ArduiRFMQTT::genPayload()
+{
+  long beat = time(0);
+  stringstream payloadBeatSS;
+  // convert beat to string
+  payloadBeatSS << beat;
+  // enncode beat
+  string encodedBeatStr = this->encode_b64(payloadBeatSS.str());
+  string toHash = encodedBeatStr +"."+ encodedBeatStr;
+  string encodedHMAC = genHash(toHash);
+  string fullPL(toHash + "." +  encodedHMAC);
+  cout << "Generated heartbeat: " << endl; 
+  cout << fullPL << endl; 
+  return fullPL;
 }
 
 void ArduiRFMQTT::sendHeartbeat(){
-  unsigned long beat = time(0);
-  RF24NetworkHeader header(00, 5); // i dono send to self? what address for multicast
-  stringstream beatss;
-  beatss << beat;
-  string beat_str(beatss.str());
-  string signed_heartbeat = generateSignedPayload(beat_str);
-  char payload[signed_heartbeat.length()]; // max payload for rf24 network fragment, could be sent over multiple packets
-  strncpy(payload, signed_heartbeat.c_str(), signed_heartbeat.length()); // copy data into payload char, will probably segfault if over 144 char...
+  // i dono send to self? what address for multicast
+  RF24NetworkHeader header(00, 5); 
+  // genPayload with no params will create a heartbeat payload.
+  string fullPL = this->genPayload();
+  char payload[fullPL.length()]; // max payload for rf24 network fragment, could be sent over multiple packets
+  strncpy(payload, fullPL.c_str(), fullPL.length()); // copy data into payload char, will probably segfault if over 144 char...
   //heartbeat_pl heart = { time(0) }; 
-  payload[signed_heartbeat.length()] = '\0';
-  if(_network.multicast(header, &payload, sizeof(payload), 1)){
-      cout << "sent heartbeat: "  << payload << endl;
-      this->last_beat = beat;
+  payload[fullPL.length()] = '\0';
+  if(_network.multicast(header, &payload, fullPL.length(), 1)){
+      long sent_beat = time(0);
+      cout << "sent heartbeat: "  << sent_beat << endl;
+      this->last_beat = sent_beat;
    } else {
      cout << "hmm multicast failed try again next loop..." << endl;
    }
+}
+
+string ArduiRFMQTT::encode_b64(string to_encode)
+{
+  string encoded; 
+  CryptoPP::Base64Encoder encoder;
+
+  encoder.Put( (byte*)to_encode.data(), to_encode.size() );
+  encoder.MessageEnd();
+
+  CryptoPP::word64 size = encoder.MaxRetrievable();
+  if(size && size <= SIZE_MAX)
+  {
+     encoded.resize(size);   
+     encoder.Get((byte*)encoded.data(), encoded.size());
+  }
+  // remove new line from base64, gonna be appending it to other strings...
+  encoded.erase(std::remove(encoded.begin(), encoded.end(), '\n'), encoded.end());
+  return encoded;
+}
+
+
+string ArduiRFMQTT::decode_b64(string to_decode)
+{
+  string decoded; 
+  CryptoPP::Base64Decoder decoder;
+
+  decoder.Put( (byte*)to_decode.data(), to_decode.size() );
+  decoder.MessageEnd();
+
+  CryptoPP::word64 size = decoder.MaxRetrievable();
+  if(size && size <= SIZE_MAX)
+  {
+      decoded.resize(size);   
+      decoder.Get((byte*)decoded.data(), decoded.size());
+  }
+
+  return decoded;
 }
