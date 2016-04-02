@@ -1,11 +1,42 @@
 #include "automatond.h"
 
+
+
+
+// cout << "keys in config: " << jsonConfig.MemberCount() << endl;
+/*
+ static const char* kTypeNames[] = 
+    { "Null", "False", "True", "Object", "Array", "String", "Number" };
+for (Value::ConstMemberIterator itr = jsonConfig.MemberBegin();
+    itr != jsonConfig.MemberEnd(); ++itr)
+{
+    printf("Type of member %s is %s\n",
+        itr->name.GetString(), kTypeNames[itr->value.GetType()]);
+}
+*/  
+
 using namespace std;
 using namespace rapidjson;
 
 int main(int argc, char *argv[])
 {
- 
+  // create object to store config document
+  Document jsonConfig = getConfig("/.automatond.json");
+  // if we could open it we are good, if not close with err
+  if(jsonConfig.IsObject())
+  { 
+    int allKeys = 1;
+    string configKeys[] = {"ACL","MQTT_TOPIC", "MQTT_OUT", "MQTT_IN", "SECRET_KEY"};
+    for(const auto& configKey : configKeys) {
+       allKeys = jsonConfig.HasMember(configKey.c_str());
+    }
+    if(allKeys > 0){cout << "got all the config keys we need!" << endl;
+    } else {cout << "Invalid configuration file" << endl; return 1;}
+  } else {
+    // exit program with code 1
+    return 1;
+  }
+
   //variables to store cmdline params
   string this_node_id_arg;
   int daemonFlag = 0;
@@ -90,6 +121,29 @@ static void show_usage(string name)
 }
 
 
+Document getConfig(const char* configPath)
+{
+  string userHome(getenv("HOME"));
+  string configFileAbsPath(userHome + configPath);
+  FILE* configFilep = fopen(configFileAbsPath.c_str(), "rb");  // open config json as file stream
+  Document jsonConfig;
+  if (configFilep != NULL) // if we could open
+  {
+    cout << "Opened configFile: " << configFileAbsPath << endl;
+    char readBuffer[3000];
+    FileReadStream configFileStream(configFilep, readBuffer, sizeof(readBuffer));
+    if (jsonConfig.ParseStream(configFileStream).HasParseError()) {
+          fprintf(stderr, "\nError(offset %u): %s\n", 
+        (unsigned)jsonConfig.GetErrorOffset(),
+        GetParseError_En(jsonConfig.GetParseError()));
+    } 
+  } else {
+     cerr << "Could not open config file: " << configFileAbsPath << endl;
+  }
+  fclose(configFilep);
+  return jsonConfig;
+}
+
 long ArduiRFMQTT::lastBeatSent()
 {
   return this->last_beat;
@@ -161,74 +215,134 @@ void ArduiRFMQTT::on_disconnect(int rc) {
 
 void ArduiRFMQTT::on_message(const struct mosquitto_message *message)
 {
-  char payload_chars[message->payloadlen+1];
-  memcpy(payload_chars,message->payload,message->payloadlen);
+  std::cout << "Got a message for RF24Network!" << std::endl;
+  string msg_topic(message->topic);
+  msg_topic.erase(0,1);// get rid of leading / 
+  size_t root_topic_pos = msg_topic.find_first_of("/");
+  // find last period, which designates beggining of MAC
+  size_t node_addr_pos = msg_topic.find_last_of("/");
+  string node_addr_str = msg_topic.substr(node_addr_pos+1, msg_topic.length());
+  uint8_t node_addr = stoi(node_addr_str, nullptr, 8);
+  string root_topic_str = msg_topic.substr(0, root_topic_pos);
 
-  string payloadToEncode(payload_chars);
-  string encodedAndSignedPL = genPayload(payloadToEncode);
+  if(_network.is_valid_address(node_addr))
+  { 
+    cout << "valid address! " << static_cast<int>(node_addr) << endl; 
+    cout << "root topic: " << root_topic_str << endl; 
+    // buffer to send over network
+    char payload_chars[message->payloadlen+1];
+    // copy payload to it?
+    memcpy(payload_chars,message->payload,message->payloadlen);
+    payload_chars[message->payloadlen] = '\0';
+    // create string to encode and sign.
+    string payloadToEncode(payload_chars);
+    std::cout << "To encode: " << std::endl;
+    std::cout << payloadToEncode << std::endl;
+    // encode and sign
+    string encodedAndSignedPL = genPayload(payloadToEncode);
+    std::cout << "Encoded: " << std::endl;
+    std::cout << encodedAndSignedPL << std::endl;
 
-
-  std::cout << "Got a message!" << std::endl;
-  std::cout << message->topic << std::endl;
-  std::cout << message->payloadlen << std::endl;
-  std::cout << payloadToEncode << std::endl;
-  //std::cout << encodedAndSignedPL << std::endl;
+    size_t payload_size = encodedAndSignedPL.length();
+    // RF24Network defaults to max 144byte payloads, make sure we dont try to send those..
+    if(payload_size <= MAX_PAYLOAD_LEN){
+      // need to be able to change message type, only the one for now...
+      RF24NetworkHeader header(node_addr, 65); 
+      char payload_for_rf24[payload_size]; 
+      // copy data into payload_for_rf24 buffer
+      strncpy(payload_for_rf24, encodedAndSignedPL.c_str(), payload_size); 
+      // send on RFNetwork.
+      if(_network.write(header, &payload_for_rf24, payload_size))
+       {
+        cout << "sent payload: " << payloadToEncode << endl;
+        cout << "to node:  0" << static_cast<int>(node_addr) << endl;
+        cout << "encoded payload size: " << payload_size << endl;
+       } else {
+        cout << "Failed sending payload: " << payloadToEncode << endl;
+        cout << "to node:  0" << static_cast<int>(node_addr) << endl;
+        cout << "encoded payload size: " << payload_size << endl;
+       }
+    }  else {
+        cout << "Failed sending payload: " << payloadToEncode << endl;
+        cout << "to node:  0" << static_cast<int>(node_addr) << endl;
+        cout << "encoded payload size: " << payload_size << endl;
+    }
+  }
 }
 
 void ArduiRFMQTT::handleIncomingRF24Msg() //pass socket and network through as reference
 {
-  RF24NetworkHeader header; // create header
-  char payloadJ[120]; //max payload for rf24 network fragment, could be sent over multiple packets
-  unsigned long hb;
-  size_t readP = this->_network.read(header,&payloadJ, sizeof(payloadJ));
-  payloadJ[readP] ='\0';
-  cout << "got payload from rf!: " << payloadJ << endl;
-  cout << "from node: " << oct << header.from_node << endl;
+  // create header object to store incoming header
+  RF24NetworkHeader header;
+  //max payload for rf24 network fragment, could be sent over multiple packets
+  char incoming_msg_buf[144]; 
+  // read RF24Network fragment, store it in incoming_msg_buf
+  size_t readP = this->_network.read(header,&incoming_msg_buf, sizeof(incoming_msg_buf));
+  incoming_msg_buf[readP] ='\0';
+  // grab my time right after reading network fragment...
+  long myBeat = time(0);
+  cout << "got payload from rf!: " << incoming_msg_buf << endl;
+  cout << "from node: 0" << oct << header.from_node << endl;
   cout << "of type: " << static_cast<int>(header.type) << endl;
-  //cout << payloadJ << endl;
-  string payloadStr(payloadJ); // create string object to strip nonsense off buffer
-  if(payloadStr.size() != readP){ payloadStr.resize(readP); } // resize payloadStr 
-  std::size_t HEADER_LEN = payloadStr.find_first_of(".");
-  std::size_t MAC_POS = payloadStr.find_last_of(".");
+  //cout << incoming_msg_buf << endl;
+  // create string object to strip nonsense off buffer
+  string payloadStr(incoming_msg_buf); 
+  // resize payloadStr 
+  if(payloadStr.size() != readP){ payloadStr.resize(readP); } 
+  // find first period to determine header length, probably unesseary - should be 16
+  size_t HEADER_LEN = payloadStr.find_first_of(".");
+  // find last period, which designates beggining of MAC
+  size_t MAC_POS = payloadStr.find_last_of(".");
+  // grab MAC from end of payloadStr, store in encodedMAC
   string encodedMAC = payloadStr.substr(MAC_POS+1, payloadStr.length());
+  // grab header+payload to hash
   string signedPL = payloadStr.substr(0, MAC_POS);
-  cout << "Signed encoded PL" << endl;
-  cout << signedPL << endl;
+  // copy string to hash into tempbuf to be destroyed by hashing process, pretty sure...
   char signedPL_TO_HASH[signedPL.length()+1];
   signedPL.copy(signedPL_TO_HASH, signedPL.length(), 0);
   signedPL_TO_HASH[signedPL.length()] = '\0';
+  // decode the MAC
   string decodedMAC = this->decode_b64(encodedMAC);
+  // generate MAC of message
   uint8_t hashout[DIGEST_SIZE];
-  blake2s(hashout, signedPL_TO_HASH, SECRET_KEY, DIGEST_SIZE, strlen(signedPL_TO_HASH), sizeof(SECRET_KEY)); //generate hash of payload
+  //generate hash of payload
+  blake2s(hashout, signedPL_TO_HASH, SECRET_KEY, DIGEST_SIZE, strlen(signedPL_TO_HASH), sizeof(SECRET_KEY)); 
   stringstream hashHex;
   for(int i=0; i< DIGEST_SIZE; i++){
-     hashHex << std::hex << +hashout[i];   // convert uint8_t bytes to hex chars
+     // convert uint8_t bytes to hex chars
+     hashHex << std::hex << +hashout[i];   
   }
-    // create string object from hashHex stringstream
+  // create string object from hashHex stringstream
   string msgHash(hashHex.str()); 
-     // test if delivered hash and our version of hash match
+  // test if delivered hash and our version of hash match
   if(decodedMAC == msgHash){
+    // slice up payload into a string for encoded header, and one for encoded payload 
     string encodedBEAT = payloadStr.substr(0, HEADER_LEN);
     string encodedMSG = payloadStr.substr(HEADER_LEN+1, (payloadStr.length()-(HEADER_LEN+encodedMAC.length()+2)));
+    // decode msg beat to test if it aligns with our beat
     string decodedBEAT = this->decode_b64(encodedBEAT);
-    string decodedMSG = this->decode_b64(encodedMSG);
-    StringStream s(decodedMSG.c_str());
-    Document d;
-    d.ParseStream(s);
+    // convert str to long
     long beatFromMsg = atol(decodedBEAT.c_str());
-    long myBeat = time(0);
     printf("Beat from MSG: %ld\n", beatFromMsg);
     printf("My beat: %ld\n", myBeat);
-     
-    if(d.IsObject()){
-        cout << "JSON object recieved!" << endl;
-    } else if(d.IsArray()){
-        cout << "JSON array recieved!" << endl;
+    // test difference in time of beats
+    long diff = (myBeat - beatFromMsg);
+    // allow for one second of sway
+    if(diff <= 1)
+    { 
+      // we know it is a valid message, time to decode and send over MQTT
+      string decodedMSG = this->decode_b64(encodedMSG);
+      cout << "Got a valid message: " << decodedMSG << endl; 
     } else {
-         cout << "not a json array or object:(" << endl;
-    }
-      
-  }
+      cerr << "Invalid message beat!" << endl;
+      cout << "from node: 0" << oct << header.from_node << endl;
+      cout << "of type: " << static_cast<int>(header.type) << endl;
+    }    
+  } else {
+    cerr << "Invalid MAC!" << endl;
+    cout << "from node: 0" << oct << header.from_node << endl;
+    cout << "of type: " << static_cast<int>(header.type) << endl;
+  }   
 }
 
 string ArduiRFMQTT::genHash(string toHash, bool encoded)
@@ -237,15 +351,12 @@ string ArduiRFMQTT::genHash(string toHash, bool encoded)
     blake2s(hashout, toHash.c_str(), SECRET_KEY, DIGEST_SIZE, toHash.length(), sizeof(SECRET_KEY)); //generate hash of payload
     stringstream hashHex;
     for(int i=0; i< DIGEST_SIZE; i++){
-      hashHex << std::hex << +hashout[i];   // convert uint8_t bytes to hex chars
+      // convert uint8_t bytes to hex chars
+      hashHex << std::hex << +hashout[i];   
     }
     string MAC(hashHex.str());
-    if(encoded){ 
-      string encMAC = this->encode_b64(MAC);
-      return encMAC;
-    } else {
-      return MAC;
-    } 
+    string returnVal = (encoded) ? this->encode_b64(MAC) : MAC;
+    return returnVal;
 }
 
 string ArduiRFMQTT::genPayload(std::string payload_msg)

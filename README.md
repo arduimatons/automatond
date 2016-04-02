@@ -1,6 +1,7 @@
 # automatond
 Heart of the arduimaton network, and the only internet connected node.
 
+- Adds functionality which leverages RF24Network fragmented payload feature that allows for 144 byte payloads send as fragments
 - Uses [Blake2s](https://blake2.net/) keyed hash algorithm to sign all messages with a symmetric key
 - Broadcasts signed heartbeats to RF24Network nodes to maintain a time reference
 - Configured `SECRET_KEY` and `DIGEST_SIZE` must match on all nodes to effectively validates hashes.
