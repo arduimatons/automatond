@@ -35,7 +35,7 @@ endif
 # define all programs
 PROGRAMS = automatond
 SOURCES = ${PROGRAMS:=.cpp}
-LIBS=-lb2 -lcrypto++ -lmosquittopp -lrf24-bcm -lrf24network -lArduiPi_OLED -I/root/libs/rapidjson/include
+LIBS=-lb2 -lcrypto++ -lmosquittopp -lrf24-bcm -lrf24network -lArduiPi_OLED
 
 
 ${PROGRAMS}: ${SOURCES}

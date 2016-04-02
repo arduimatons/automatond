@@ -6,3 +6,5 @@ bin/*
 .DS_Store
 
 sftp-config.json
+# markdown preview
+README.html 
