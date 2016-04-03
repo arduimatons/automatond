@@ -1,15 +1,37 @@
 {
-  "ACL": [{
-    "01": "name1"
-  }, {
-    "02": "name2"
-  }, {
-    "03": "name3"
-  }, {
-    "04": "name4"
-  }],
+
+  "ACL": {
+    "03": {
+      "type": "switch",
+      "settings": {
+        "green": "bool",
+        "red": "bool"
+      }
+    },
+
+    "04": {
+      "type": "motion",
+      "settings": {}
+    },
+
+    "02": {
+      "type": "temp",
+      "settings": {}
+    }
+  },
+
   "MQTT_TOPIC": "rf24",
+
   "MQTT_OUT": "to",
+
   "MQTT_IN": "from",
-  "SECRET_KEY": "thisisaverysecretkey"
+
+  "SECRET_KEY": "thisisaverysecretkey",
+
+  "MQTT_CLIENT": {
+    "ID": "rf_relay",
+    "HOST": "localhost",
+    "PORT": 1883
+  }
+
 }

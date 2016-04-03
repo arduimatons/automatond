@@ -8,7 +8,7 @@
   #define SECRET_KEY "thisisaverysecretkey"
 
   #define DIGEST_SIZE_HEX (DIGEST_SIZE*2)+1
-  #define HEARTBEAT_INTERVAL 20
+  #define HEARTBEAT_INTERVAL 30   // in seconds
 
   #define MAX_PAYLOAD_LEN 144
   

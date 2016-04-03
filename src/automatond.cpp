@@ -26,7 +26,8 @@ int main(int argc, char *argv[])
   if(jsonConfig.IsObject())
   { 
     int allKeys = 1;
-    string configKeys[] = {"ACL","MQTT_TOPIC", "MQTT_OUT", "MQTT_IN", "SECRET_KEY"};
+    //using rapidjson object to store some data, and pass it around as a parameter to functions
+    string configKeys[] = {"ACL","MQTT_TOPIC", "MQTT_OUT", "MQTT_IN", "SECRET_KEY","MQTT_CLIENT"};
     for(const auto& configKey : configKeys) {
        allKeys = jsonConfig.HasMember(configKey.c_str());
     }
@@ -68,37 +69,43 @@ int main(int argc, char *argv[])
       }
   }
 
+  // RF24 radio constructor
   RF24 radio(22, 0);
+  // RF24Network constructor
   RF24Network network(radio);
 
-  ArduiRFMQTT relay("rf_relay", "localhost", 1883, network);
+  // connects to MQTT broker
+  ArduiRFMQTT relay(jsonConfig["MQTT_CLIENT"]["ID"].GetString(), network, jsonConfig);
 
-  //string hashed = relay.genHash(testHash, false);
-  //string hashedEnc = relay.genHash(testHash, true);
-  //cout << hashed << endl; 
-  //cout << hashedEnc << endl; 
-
+  // start RF24 radio
   if(radio.begin()){
-
+    // configure radio and network
     radio.setChannel(115);
     network.begin(00);
+    // delay for to make sure radio is up.
     delay(100);
 
+    // send a heartbeat as soon as we come online
     relay.sendHeartbeat();
     // start looping
     while(1)
     {
-      network.update();  // keep RFNetwork up
-      relay.loop(0,1);   // keep MQTT relay up 0 second timeout
+      // keep RFNetwork up
+      network.update();  
+      // keep MQTT relay up 0 second timeout
+      relay.loop(0,1);
 
-      if( network.available() ){   // we have a message from the sensor network
-        relay.handleIncomingRF24Msg();  // also forward the 0 but going to register this node and send a heatbeat for it
+      // we have a message from the sensor network
+      if( network.available() ){
+        // handle the message
+        relay.handleIncomingRF24Msg();  
       }
 
+      // send heartbeat every HEARTBEAT_INTERVAL seconds
       if(time(0) > (relay.lastBeatSent() + HEARTBEAT_INTERVAL)){ relay.sendHeartbeat(); }
     }
   }
-
+  // could not start radio, exit.
   cout << "radio.begin failed!" << endl;
   return 0;
 }
@@ -122,23 +129,33 @@ static void show_usage(string name)
 
 
 Document getConfig(const char* configPath)
-{
+{ 
+  // get users home path
   string userHome(getenv("HOME"));
+  // add config path to it
   string configFileAbsPath(userHome + configPath);
-  FILE* configFilep = fopen(configFileAbsPath.c_str(), "rb");  // open config json as file stream
+  // open config json as file pointer
+  FILE* configFilep = fopen(configFileAbsPath.c_str(), "rb"); 
+  // create document to return
   Document jsonConfig;
   if (configFilep != NULL) // if we could open
   {
     cout << "Opened configFile: " << configFileAbsPath << endl;
     char readBuffer[3000];
+    //create rapidjson FileReadStream
     FileReadStream configFileStream(configFilep, readBuffer, sizeof(readBuffer));
+    // catch parsing error
     if (jsonConfig.ParseStream(configFileStream).HasParseError()) {
           fprintf(stderr, "\nError(offset %u): %s\n", 
         (unsigned)jsonConfig.GetErrorOffset(),
         GetParseError_En(jsonConfig.GetParseError()));
+        fclose(configFilep);
+        // should exit here.
     } 
   } else {
      cerr << "Could not open config file: " << configFileAbsPath << endl;
+     fclose(configFilep);
+     // should exit here
   }
   fclose(configFilep);
   return jsonConfig;
@@ -149,13 +166,17 @@ long ArduiRFMQTT::lastBeatSent()
   return this->last_beat;
 }
 
-ArduiRFMQTT::ArduiRFMQTT(const char * _id, const char * _host, int _port, RF24Network& network) : mosquittopp(_id), _network(network)
+ArduiRFMQTT::ArduiRFMQTT(const char* _id, RF24Network& network, Document& config) : mosquittopp(_id), _network(network)
  {
    mosqpp::lib_init();        // Mandatory initialization for mosquitto library
    this->keepalive = 60;    // Basic configuration setup for myMosq class
    this->id = _id;
-   this->port = _port;
-   this->host = _host;
+   this->topic_outgoing = config["MQTT_OUT"].GetString();
+   this->topic_incoming = config["MQTT_IN"].GetString();
+   this->topic_root = config["MQTT_TOPIC"].GetString();
+   this->secret_key_override = config["SECRET_KEY"].GetString();
+   this->port = config["MQTT_CLIENT"]["PORT"].GetInt();
+   this->host = config["MQTT_CLIENT"]["HOST"].GetString();
    connect(host, port, keepalive);
  };
 
@@ -169,7 +190,7 @@ ArduiRFMQTT::~ArduiRFMQTT() {
 bool ArduiRFMQTT::send_message(uint8_t from_node, const  char * _message)
  {
   stringstream topic;
-  topic << "/rf24/out/" << oct << from_node;
+  topic << "/rf24/from/" << oct << from_node;
   string topic_str(topic.str());
   
   cout << "SendingMessage: " <<  _message <<  endl;
@@ -332,7 +353,8 @@ void ArduiRFMQTT::handleIncomingRF24Msg() //pass socket and network through as r
     { 
       // we know it is a valid message, time to decode and send over MQTT
       string decodedMSG = this->decode_b64(encodedMSG);
-      cout << "Got a valid message: " << decodedMSG << endl; 
+      cout << "Got a valid message: " << decodedMSG << endl;
+      this->send_message(header.from_node, decodedMSG.c_str());
     } else {
       cerr << "Invalid message beat!" << endl;
       cout << "from node: 0" << oct << header.from_node << endl;

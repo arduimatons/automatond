@@ -73,7 +73,8 @@
   class ArduiRFMQTT: public mosqpp::mosquittopp
   {
     public:
-      ArduiRFMQTT(const char *id, const char *host, int port, RF24Network& network);
+   //const char * _id
+      ArduiRFMQTT(const char* _id, RF24Network& network, rapidjson::Document& config);
       ~ArduiRFMQTT();
       // sent message over mqtt
       bool send_message(uint8_t from_node, const char * _message);
@@ -97,6 +98,12 @@
      // keep track of nodes that are active.
      std::vector<node> node_list;   
      
+     std::string topic_outgoing;
+     std::string topic_incoming;
+     std::string topic_root;
+
+     std::string secret_key_override;
+
      long last_beat;
      const char     *     host;
      const char    *     id;
