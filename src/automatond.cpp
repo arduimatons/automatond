@@ -74,7 +74,8 @@ int main(int argc, char *argv[])
   // RF24Network constructor
   RF24Network network(radio);
 
-  // connects to MQTT broker
+  // connects to MQTT broker 
+  // need to initialize with ID...
   ArduiRFMQTT relay(jsonConfig["MQTT_CLIENT"]["ID"].GetString(), network, jsonConfig);
 
   // start RF24 radio
@@ -171,9 +172,11 @@ ArduiRFMQTT::ArduiRFMQTT(const char* _id, RF24Network& network, Document& config
    mosqpp::lib_init();        // Mandatory initialization for mosquitto library
    this->keepalive = 60;    // Basic configuration setup for myMosq class
    this->id = _id;
+   //this->relay_config = config;
    this->topic_outgoing = config["MQTT_OUT"].GetString();
    this->topic_incoming = config["MQTT_IN"].GetString();
    this->topic_root = config["MQTT_TOPIC"].GetString();
+   this->ACL = config["ACL"].GetObject();
    this->secret_key_override = config["SECRET_KEY"].GetString();
    this->port = config["MQTT_CLIENT"]["PORT"].GetInt();
    this->host = config["MQTT_CLIENT"]["HOST"].GetString();
@@ -187,10 +190,12 @@ ArduiRFMQTT::~ArduiRFMQTT() {
  }
 
 
-bool ArduiRFMQTT::send_message(uint8_t from_node, const  char * _message)
+bool ArduiRFMQTT::send_to_mqtt(uint8_t from_node, const  char * _message)
  {
   stringstream topic;
-  topic << "/rf24/from/" << oct << from_node;
+  // build topic string from ss
+  topic << "/" << this->topic_root << "/"<<  this->topic_outgoing << "/" << oct << from_node;
+  // to a string
   string topic_str(topic.str());
   
   cout << "SendingMessage: " <<  _message <<  endl;
@@ -216,8 +221,26 @@ void ArduiRFMQTT::on_disconnect(int rc) {
  void ArduiRFMQTT::on_connect(int rc)
  {
  if ( rc == 0 ) {
-   std::cout << "ArduiRFMQTT - connected with server" << std::endl;
-   subscribe(NULL, "/rf24/to/+");
+/*
+   static const char* kTypeNames[] = 
+    { "Null", "False", "True", "Object", "Array", "String", "Number" };
+for (Value::ConstMemberIterator itr = jsonConfig.MemberBegin();
+    itr != jsonConfig.MemberEnd(); ++itr)
+{
+    printf("Type of member %s is %s\n",
+        itr->name.GetString(), kTypeNames[itr->value.GetType()]);
+}
+*/
+
+
+  std::cout << "ArduiRFMQTT - connected with server" << std::endl;
+  stringstream topic;
+  // build topic string from ss
+  topic << "/" << this->topic_root << "/"<<  this->topic_incoming << "/" << "+";
+  // to a string
+  string topic_str(topic.str());
+
+  subscribe(NULL, topic_str.c_str());
  } else {
  std::cout << "ArduiRFMQTT - Impossible to connect with server(" << rc << ")" << std::endl;
  }
@@ -354,7 +377,7 @@ void ArduiRFMQTT::handleIncomingRF24Msg() //pass socket and network through as r
       // we know it is a valid message, time to decode and send over MQTT
       string decodedMSG = this->decode_b64(encodedMSG);
       cout << "Got a valid message: " << decodedMSG << endl;
-      this->send_message(header.from_node, decodedMSG.c_str());
+      this->send_to_mqtt(header.from_node, decodedMSG.c_str());
     } else {
       cerr << "Invalid message beat!" << endl;
       cout << "from node: 0" << oct << header.from_node << endl;

@@ -22,9 +22,9 @@
 
   "MQTT_TOPIC": "rf24",
 
-  "MQTT_OUT": "to",
+  "MQTT_OUT": "from",
 
-  "MQTT_IN": "from",
+  "MQTT_IN": "to",
 
   "SECRET_KEY": "thisisaverysecretkey",
 

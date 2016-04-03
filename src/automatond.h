@@ -62,7 +62,9 @@
   // struct to represent a node on the network.
   struct node {
                uint8_t addr;
+               // 10 chars + delim
                char name[11];
+               char type[11];
                long last_msg_at;
                bool alive;
              };
@@ -77,7 +79,7 @@
       ArduiRFMQTT(const char* _id, RF24Network& network, rapidjson::Document& config);
       ~ArduiRFMQTT();
       // sent message over mqtt
-      bool send_message(uint8_t from_node, const char * _message);
+      bool send_to_mqtt(uint8_t from_node, const char * _message);
       //
       long lastBeatSent();
       //generate emptypayload, for hb
@@ -93,6 +95,7 @@
       std::string decode_b64(std::string);
       // function to validate incoming RF24Network message
       void handleIncomingRF24Msg();
+
         
     private:
      // keep track of nodes that are active.
@@ -103,6 +106,8 @@
      std::string topic_root;
 
      std::string secret_key_override;
+
+     rapidjson::Value ACL; 
 
      long last_beat;
      const char     *     host;
