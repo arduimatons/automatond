@@ -2,20 +2,28 @@
 
   "ACL": {
     "03": {
-      "type": "switch",
-      "settings": {
+      "type": "SWITCH",
+      "bat": false,
+      "opts": {
         "green": "bool",
         "red": "bool"
       }
     },
 
     "04": {
-      "type": "motion",
+      "bat": true,
+      "type": "MOTION",
       "settings": {}
     },
 
     "02": {
-      "type": "temp",
+      "bat": false,
+      "type": "TEMP",
+      "settings": {}
+    },
+    "05": {
+      "bat": false,
+      "type": "MOTION",
       "settings": {}
     }
   },

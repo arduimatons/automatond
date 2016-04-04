@@ -172,14 +172,29 @@ ArduiRFMQTT::ArduiRFMQTT(const char* _id, RF24Network& network, Document& config
    mosqpp::lib_init();        // Mandatory initialization for mosquitto library
    this->keepalive = 60;    // Basic configuration setup for myMosq class
    this->id = _id;
-   //this->relay_config = config;
+   // grab ACL off json store move to ACL to iterate
+   rapidjson::Value ACL = config["ACL"].GetObject() ; 
+  // iterate rapidjson object values
+  for (Value::ConstMemberIterator itr = ACL.MemberBegin();
+        itr != ACL.MemberEnd(); ++itr)
+  {
+    //create a node struct to push onto node_list vector
+    Node aNode;
+    // convert config json data into C++ struct data
+    aNode.addr = stoi(itr->name.GetString());
+    aNode.type = ACL[itr->name.GetString()]["type"].GetString();
+    this->node_list.push_back(aNode);
+  }
+  // sort node list by type, to be leverages later in subscribing to topics.
+  std::sort(node_list.begin(), node_list.end(), compareByType);
+   // set other options from json
    this->topic_outgoing = config["MQTT_OUT"].GetString();
    this->topic_incoming = config["MQTT_IN"].GetString();
    this->topic_root = config["MQTT_TOPIC"].GetString();
-   this->ACL = config["ACL"].GetObject();
    this->secret_key_override = config["SECRET_KEY"].GetString();
    this->port = config["MQTT_CLIENT"]["PORT"].GetInt();
    this->host = config["MQTT_CLIENT"]["HOST"].GetString();
+   // connect to MQTT broker. mosquittolib...
    connect(host, port, keepalive);
  };
 
@@ -190,7 +205,7 @@ ArduiRFMQTT::~ArduiRFMQTT() {
  }
 
 
-bool ArduiRFMQTT::send_to_mqtt(uint8_t from_node, const  char * _message)
+bool ArduiRFMQTT::send_to_mqtt(uint16_t from_node, const  char * _message)
  {
   stringstream topic;
   // build topic string from ss
@@ -221,16 +236,21 @@ void ArduiRFMQTT::on_disconnect(int rc) {
  void ArduiRFMQTT::on_connect(int rc)
  {
  if ( rc == 0 ) {
-/*
-   static const char* kTypeNames[] = 
-    { "Null", "False", "True", "Object", "Array", "String", "Number" };
-for (Value::ConstMemberIterator itr = jsonConfig.MemberBegin();
-    itr != jsonConfig.MemberEnd(); ++itr)
+
+// create temp node_list to remove any nodes with duplicate types.
+std::vector<Node> node_list_types_temp; 
+std::copy(node_list.begin(), node_list.end(),  std::back_inserter(node_list_types_temp));
+
+for(vector<Node>::iterator it=node_list_types_temp.begin(); it != node_list_types_temp.end(); ++it)
 {
-    printf("Type of member %s is %s\n",
-        itr->name.GetString(), kTypeNames[itr->value.GetType()]);
+  stringstream topicT;
+  cout << "Node from struct:" << endl;
+  cout << "Addr: 0" << oct << static_cast<int>(it->addr) << endl;
+  cout << "Type: " << it->type << endl;
+  topicT << "/" << this->topic_root << "/"<<  this->topic_incoming << "/" << it->type << "+";
+  cout << topicT << endl;
 }
-*/
+  
 
 
   std::cout << "ArduiRFMQTT - connected with server" << std::endl;
@@ -266,7 +286,7 @@ void ArduiRFMQTT::on_message(const struct mosquitto_message *message)
   // find last period, which designates beggining of MAC
   size_t node_addr_pos = msg_topic.find_last_of("/");
   string node_addr_str = msg_topic.substr(node_addr_pos+1, msg_topic.length());
-  uint8_t node_addr = stoi(node_addr_str, nullptr, 8);
+  uint16_t node_addr = stoi(node_addr_str, nullptr, 8);
   string root_topic_str = msg_topic.substr(0, root_topic_pos);
 
   if(_network.is_valid_address(node_addr))
@@ -324,10 +344,23 @@ void ArduiRFMQTT::handleIncomingRF24Msg() //pass socket and network through as r
   size_t readP = this->_network.read(header,&incoming_msg_buf, sizeof(incoming_msg_buf));
   incoming_msg_buf[readP] ='\0';
   // grab my time right after reading network fragment...
-  long myBeat = time(0);
+  time_t myBeat = std::time(nullptr);
   cout << "got payload from rf!: " << incoming_msg_buf << endl;
   cout << "from node: 0" << oct << header.from_node << endl;
   cout << "of type: " << static_cast<int>(header.type) << endl;
+  stringstream nodeID_ss;
+  nodeID_ss << "0" << oct << header.from_node;
+
+  std::vector<Node>::iterator res = std::find_if(this->node_list.begin(), this->node_list.end(), 
+         find_by_addr(header.from_node));
+
+  if(res != this->node_list.end())
+  {
+    cout << "OK found this node in the ACL!!!: 0" << oct << header.from_node << endl;
+  } else {
+    cout << "BAD this node is NOT in the ACL!!!: 0" << oct << header.from_node << endl;
+  }
+
   //cout << incoming_msg_buf << endl;
   // create string object to strip nonsense off buffer
   string payloadStr(incoming_msg_buf); 
@@ -406,7 +439,7 @@ string ArduiRFMQTT::genHash(string toHash, bool encoded)
 
 string ArduiRFMQTT::genPayload(std::string payload_msg)
 {
-  long beat = time(0);
+  time_t beat = std::time(0);
   stringstream payloadBeatSS;
   // convert beat to string
   payloadBeatSS << beat;
@@ -427,7 +460,7 @@ string ArduiRFMQTT::genPayload(std::string payload_msg)
 
 string ArduiRFMQTT::genPayload()
 {
-  long beat = time(0);
+  time_t beat = time(nullptr);
   stringstream payloadBeatSS;
   // convert beat to string
   payloadBeatSS << beat;
@@ -436,23 +469,21 @@ string ArduiRFMQTT::genPayload()
   string toHash = encodedBeatStr +"."+ encodedBeatStr;
   string encodedHMAC = genHash(toHash);
   string fullPL(toHash + "." +  encodedHMAC);
-  cout << "Generated heartbeat: " << endl; 
-  cout << fullPL << endl; 
   return fullPL;
 }
 
 void ArduiRFMQTT::sendHeartbeat(){
   // i dono send to self? what address for multicast
-  RF24NetworkHeader header(00, 5); 
+  RF24NetworkHeader header(00,5);
   // genPayload with no params will create a heartbeat payload.
   string fullPL = this->genPayload();
   char payload[fullPL.length()]; // max payload for rf24 network fragment, could be sent over multiple packets
   strncpy(payload, fullPL.c_str(), fullPL.length()); // copy data into payload char, will probably segfault if over 144 char...
   //heartbeat_pl heart = { time(0) }; 
   payload[fullPL.length()] = '\0';
-  if(_network.multicast(header, &payload, fullPL.length(), 1)){
-      long sent_beat = time(0);
-      cout << "sent heartbeat: "  << sent_beat << endl;
+  if(_network.multicast(header, &payload, fullPL.length(),1)){
+      time_t sent_beat = std::time(nullptr);
+      printf("sent beat: %ld\n", sent_beat);
       this->last_beat = sent_beat;
    } else {
      cout << "hmm multicast failed try again next loop..." << endl;

@@ -27,6 +27,7 @@
   #include <unistd.h> 
   #include <getopt.h>  // cmdline option parsing
   #include <typeinfo> // not sure
+  #include <vector>
   
 // mqtt
 #include <mosquitto.h>
@@ -60,14 +61,35 @@
   static void show_usage(std::string);
   
   // struct to represent a node on the network.
-  struct node {
-               uint8_t addr;
+ struct Node {
+               uint16_t addr;
                // 10 chars + delim
-               char name[11];
-               char type[11];
+               std::string name;
+               std::string type;
                long last_msg_at;
                bool alive;
              };
+
+struct find_by_addr
+{
+    uint16_t addr;
+    find_by_addr(uint16_t addr) : addr(addr) {}
+    bool operator () ( const Node& n ) const
+    {
+        return n.addr == addr;
+    }
+};
+
+bool compareByType(const Node& a, const Node& b)
+{
+    return a.type < b.type;
+}
+
+enum NODE_TYPES { TEMP=1, MOTION, SWITCH, RGB};
+// enums to for message types 0-5
+enum NO_ACK_MSG_TYPES { NODE_STATUS = 0, NODE_MSG1, NODE_MSG2, NODE_MSG3, NODE_MSG4, BEAT };
+// 65-67
+enum ACK_MSG_TYPES { FUNCTION_1 = 65, FUNCTION_2, FUNCTION_3};
 
   // used to grab config file as rapidjson document.
   rapidjson::Document getConfig(const char*);
@@ -79,7 +101,7 @@
       ArduiRFMQTT(const char* _id, RF24Network& network, rapidjson::Document& config);
       ~ArduiRFMQTT();
       // sent message over mqtt
-      bool send_to_mqtt(uint8_t from_node, const char * _message);
+      bool send_to_mqtt(uint16_t from_node, const char * _message);
       //
       long lastBeatSent();
       //generate emptypayload, for hb
@@ -99,7 +121,8 @@
         
     private:
      // keep track of nodes that are active.
-     std::vector<node> node_list;   
+     // also acts as ACL after loading in json data
+     std::vector<Node> node_list;   
      
      std::string topic_outgoing;
      std::string topic_incoming;
@@ -107,9 +130,7 @@
 
      std::string secret_key_override;
 
-     rapidjson::Value ACL; 
-
-     long last_beat;
+     time_t last_beat;
      const char     *     host;
      const char    *     id;
      int                port;
