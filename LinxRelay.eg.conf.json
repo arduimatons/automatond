@@ -1,0 +1,18 @@
+{
+  "ACL": ["01", "02", "03"],
+  
+  "MQTT_TOPIC": "rf24",
+
+  "MQTT_OUT": "from",
+
+  "MQTT_IN": "to",
+
+  "SECRET_KEY": "thisisaverysecretkey",
+
+  "MQTT_CLIENT": {
+    "ID": "rf_relay",
+    "HOST": "localhost",
+    "PORT": 1883
+  }
+
+}

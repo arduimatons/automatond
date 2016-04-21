@@ -1,4 +1,4 @@
-#include "automatond.h"
+#include "LinxRelay.h"
 
 
 
@@ -18,8 +18,25 @@ for (Value::ConstMemberIterator itr = jsonConfig.MemberBegin();
 using namespace std;
 using namespace rapidjson;
 
+// Instantiate the display
+ArduiPi_OLED display;
+time_t last_msg = 0;
+
 int main(int argc, char *argv[])
 {
+
+  #ifdef OLED_DEBUG
+    display.init(OLED_I2C_RESET, 3);
+    display.begin();
+    display.setTextSize(1);
+    display.setTextColor(WHITE);
+    display.clearDisplay();
+
+    printHeader();
+  #endif
+
+
+
   // create object to store config document
   Document jsonConfig = getConfig("/.automatond.json");
   // if we could open it we are good, if not close with err
@@ -27,7 +44,7 @@ int main(int argc, char *argv[])
   { 
     int allKeys = 1;
     //using rapidjson object to store some data, and pass it around as a parameter to functions
-    string configKeys[] = {"ACL","MQTT_TOPIC", "MQTT_OUT", "MQTT_IN", "SECRET_KEY","MQTT_CLIENT"};
+    string configKeys[] = {"ACL","MQTT_TOPIC", "MQTT_OUT", "MQTT_IN", "SECRET_KEY","MQTT_CLIENT", "ACL2"};
     for(const auto& configKey : configKeys) {
        allKeys = jsonConfig.HasMember(configKey.c_str());
     }
@@ -76,7 +93,7 @@ int main(int argc, char *argv[])
 
   // connects to MQTT broker 
   // need to initialize with ID...
-  ArduiRFMQTT relay(jsonConfig["MQTT_CLIENT"]["ID"].GetString(), network, jsonConfig);
+  LinxMQTTRelay relay(jsonConfig["MQTT_CLIENT"]["ID"].GetString(), network, jsonConfig);
 
   // start RF24 radio
   if(radio.begin()){
@@ -88,9 +105,35 @@ int main(int argc, char *argv[])
 
     // send a heartbeat as soon as we come online
     relay.sendHeartbeat();
+    time_t last_displayed_time = 0;
+
+    int clear_delay = 15;
+    int fake_msg_timer = 20;
     // start looping
     while(1)
     {
+
+        if(time(0) > (last_displayed_time))
+       {
+        printTime();
+        //toPrint to_display;
+        //to_display.out_msg = true;
+        //display.clearDisplay();
+        //printDisplay(to_display);
+        last_displayed_time = time(0);
+       }
+       // clear main 15 seconds after new display
+      if(time(0) > (last_msg + clear_delay))
+       {
+        clearMainArea();
+        //toPrint to_display;
+        //to_display.out_msg = true;
+        //display.clearDisplay();
+        //printDisplay(to_display);
+       }
+
+
+
       // keep RFNetwork up
       network.update();  
       // keep MQTT relay up 0 second timeout
@@ -162,12 +205,12 @@ Document getConfig(const char* configPath)
   return jsonConfig;
 }
 
-long ArduiRFMQTT::lastBeatSent()
+long LinxMQTTRelay::lastBeatSent()
 {
   return this->last_beat;
 }
 
-ArduiRFMQTT::ArduiRFMQTT(const char* _id, RF24Network& network, Document& config) : mosquittopp(_id), _network(network)
+LinxMQTTRelay::LinxMQTTRelay(const char* _id, RF24Network& network, Document& config) : mosquittopp(_id), _network(network)
  {
    mosqpp::lib_init();        // Mandatory initialization for mosquitto library
    this->keepalive = 60;    // Basic configuration setup for myMosq class
@@ -182,7 +225,7 @@ ArduiRFMQTT::ArduiRFMQTT(const char* _id, RF24Network& network, Document& config
     Node aNode;
     // convert config json data into C++ struct data
     aNode.addr = stoi(itr->name.GetString());
-    aNode.type = ACL[itr->name.GetString()]["type"].GetString();
+    aNode.type = ACL[itr->name.GetString()]["types"][0].GetString();
     this->node_list.push_back(aNode);
   }
   // sort node list by type, to be leverages later in subscribing to topics.
@@ -199,13 +242,13 @@ ArduiRFMQTT::ArduiRFMQTT(const char* _id, RF24Network& network, Document& config
  };
 
 
-ArduiRFMQTT::~ArduiRFMQTT() {
+LinxMQTTRelay::~LinxMQTTRelay() {
  loop_stop();            // Kill the thread
  mosqpp::lib_cleanup();    // Mosquitto library cleanup
  }
 
 
-bool ArduiRFMQTT::send_to_mqtt(uint16_t from_node, const  char * _message)
+bool LinxMQTTRelay::send_to_mqtt(uint16_t from_node, const  char * _message)
  {
   stringstream topic;
   // build topic string from ss
@@ -229,11 +272,11 @@ bool ArduiRFMQTT::send_to_mqtt(uint16_t from_node, const  char * _message)
  }
 
 
-void ArduiRFMQTT::on_disconnect(int rc) {
- std::cout << "ArduiRFMQTT - disconnection(" << rc << ")" << std::endl;
+void LinxMQTTRelay::on_disconnect(int rc) {
+ std::cout << "LinxMQTTRelay - disconnection(" << rc << ")" << std::endl;
  }
 
- void ArduiRFMQTT::on_connect(int rc)
+ void LinxMQTTRelay::on_connect(int rc)
  {
  if ( rc == 0 ) {
 
@@ -253,7 +296,7 @@ for(vector<Node>::iterator it=node_list_types_temp.begin(); it != node_list_type
   
 
 
-  std::cout << "ArduiRFMQTT - connected with server" << std::endl;
+  std::cout << "LinxMQTTRelay - connected with server" << std::endl;
   stringstream topic;
   // build topic string from ss
   topic << "/" << this->topic_root << "/"<<  this->topic_incoming << "/" << "+";
@@ -262,22 +305,22 @@ for(vector<Node>::iterator it=node_list_types_temp.begin(); it != node_list_type
 
   subscribe(NULL, topic_str.c_str());
  } else {
- std::cout << "ArduiRFMQTT - Impossible to connect with server(" << rc << ")" << std::endl;
+ std::cout << "LinxMQTTRelay - Impossible to connect with server(" << rc << ")" << std::endl;
  }
  }
 
- void ArduiRFMQTT::on_publish(int mid)
+ void LinxMQTTRelay::on_publish(int mid)
  {
- std::cout << "ArduiRFMQTT - Message (" << mid << ") succeed to be published " << std::endl;
+ std::cout << "LinxMQTTRelay - Message (" << mid << ") succeed to be published " << std::endl;
  }
 
- void ArduiRFMQTT::on_subscribe(int mid, int qos_count, const int *granted_qos)
+ void LinxMQTTRelay::on_subscribe(int mid, int qos_count, const int *granted_qos)
 {
   std::cout << "Subscription succeeded." << std::endl;
 }
 
 
-void ArduiRFMQTT::on_message(const struct mosquitto_message *message)
+void LinxMQTTRelay::on_message(const struct mosquitto_message *message)
 {
   std::cout << "Got a message for RF24Network!" << std::endl;
   string msg_topic(message->topic);
@@ -334,7 +377,7 @@ void ArduiRFMQTT::on_message(const struct mosquitto_message *message)
   }
 }
 
-void ArduiRFMQTT::handleIncomingRF24Msg() //pass socket and network through as reference
+void LinxMQTTRelay::handleIncomingRF24Msg() //pass socket and network through as reference
 {
   // create header object to store incoming header
   RF24NetworkHeader header;
@@ -379,7 +422,7 @@ void ArduiRFMQTT::handleIncomingRF24Msg() //pass socket and network through as r
   signedPL.copy(signedPL_TO_HASH, signedPL.length(), 0);
   signedPL_TO_HASH[signedPL.length()] = '\0';
   // decode the MAC
-  string decodedMAC = this->decode_b64(encodedMAC);
+  string decodedMAC = encodedMAC;
   // generate MAC of message
   uint8_t hashout[DIGEST_SIZE];
   //generate hash of payload
@@ -397,7 +440,7 @@ void ArduiRFMQTT::handleIncomingRF24Msg() //pass socket and network through as r
     string encodedBEAT = payloadStr.substr(0, HEADER_LEN);
     string encodedMSG = payloadStr.substr(HEADER_LEN+1, (payloadStr.length()-(HEADER_LEN+encodedMAC.length()+2)));
     // decode msg beat to test if it aligns with our beat
-    string decodedBEAT = this->decode_b64(encodedBEAT);
+    string decodedBEAT = encodedBEAT;
     // convert str to long
     long beatFromMsg = atol(decodedBEAT.c_str());
     printf("Beat from MSG: %ld\n", beatFromMsg);
@@ -405,12 +448,23 @@ void ArduiRFMQTT::handleIncomingRF24Msg() //pass socket and network through as r
     // test difference in time of beats
     long diff = (myBeat - beatFromMsg);
     // allow for one second of sway
-    if(diff <= 1)
+    if(diff <= 3)
     { 
       // we know it is a valid message, time to decode and send over MQTT
       string decodedMSG = this->decode_b64(encodedMSG);
       cout << "Got a valid message: " << decodedMSG << endl;
-      this->send_to_mqtt(header.from_node, decodedMSG.c_str());
+      #ifdef OLED_DEBUG
+        toPrint to_display;
+        to_display.in_msg = true;
+        to_display.type = static_cast<int>(header.type);
+        to_display.node_addr = header.from_node;
+        to_display.topic = "sample/topic";
+        to_display.payload = decodedMSG.c_str();
+        printDisplay(to_display);
+      #endif
+        last_msg = time(0);
+
+      send_to_mqtt(header.from_node, decodedMSG.c_str());
     } else {
       cerr << "Invalid message beat!" << endl;
       cout << "from node: 0" << oct << header.from_node << endl;
@@ -423,7 +477,7 @@ void ArduiRFMQTT::handleIncomingRF24Msg() //pass socket and network through as r
   }   
 }
 
-string ArduiRFMQTT::genHash(string toHash, bool encoded)
+string LinxMQTTRelay::genHash(string toHash)
 {
     uint8_t hashout[DIGEST_SIZE];
     blake2s(hashout, toHash.c_str(), SECRET_KEY, DIGEST_SIZE, toHash.length(), sizeof(SECRET_KEY)); //generate hash of payload
@@ -432,47 +486,49 @@ string ArduiRFMQTT::genHash(string toHash, bool encoded)
       // convert uint8_t bytes to hex chars
       hashHex << std::hex << +hashout[i];   
     }
-    string MAC(hashHex.str());
-    string returnVal = (encoded) ? this->encode_b64(MAC) : MAC;
-    return returnVal;
+   string MAC(hashHex.str());
+   return MAC;
 }
 
-string ArduiRFMQTT::genPayload(std::string payload_msg)
+//send a payload, with beat header
+string LinxMQTTRelay::genPayload(std::string payload_msg)
 {
   time_t beat = std::time(0);
   stringstream payloadBeatSS;
   // convert beat to string
   payloadBeatSS << beat;
   // encode beat
-  string encodedBeatStr = this->encode_b64(payloadBeatSS.str());
+  string BeatStr(payloadBeatSS.str());
   // encode payload_msg
   string encodedPLStr = this->encode_b64(payload_msg);
   // create new string to hash,
-  string toHash = encodedBeatStr +"."+ encodedPLStr;
+  string toHash = BeatStr +"."+ encodedPLStr;
   // generate hash
-  string encodedHMAC = genHash(toHash);
+  string HMAC = genHash(toHash);
   // build full payload
-  string fullPL(toHash + "." +  encodedHMAC);
+  string fullPL(toHash + "." +  HMAC);
   cout << "Generated payload: " << endl; 
   cout << fullPL << endl; 
   return fullPL;
 }
-
-string ArduiRFMQTT::genPayload()
+//send a beat, no payload, beat header
+string LinxMQTTRelay::genPayload()
 {
   time_t beat = time(nullptr);
   stringstream payloadBeatSS;
   // convert beat to string
   payloadBeatSS << beat;
   // enncode beat
-  string encodedBeatStr = this->encode_b64(payloadBeatSS.str());
-  string toHash = encodedBeatStr +"."+ encodedBeatStr;
-  string encodedHMAC = genHash(toHash);
-  string fullPL(toHash + "." +  encodedHMAC);
+  string BeatStr(payloadBeatSS.str());
+  string toHash = BeatStr +"."+ this->encode_b64(BeatStr);
+  string HMAC = genHash(toHash);
+  string fullPL(toHash + "." +  HMAC);
+  cout << "Generated beat: " << endl; 
+  cout << fullPL << endl; 
   return fullPL;
 }
 
-void ArduiRFMQTT::sendHeartbeat(){
+void LinxMQTTRelay::sendHeartbeat(){
   // i dono send to self? what address for multicast
   RF24NetworkHeader header(00,5);
   // genPayload with no params will create a heartbeat payload.
@@ -490,7 +546,7 @@ void ArduiRFMQTT::sendHeartbeat(){
    }
 }
 
-string ArduiRFMQTT::encode_b64(string to_encode)
+string LinxMQTTRelay::encode_b64(string to_encode)
 {
   string encoded; 
   CryptoPP::Base64Encoder encoder;
@@ -510,7 +566,7 @@ string ArduiRFMQTT::encode_b64(string to_encode)
 }
 
 
-string ArduiRFMQTT::decode_b64(string to_decode)
+string LinxMQTTRelay::decode_b64(string to_decode)
 {
   string decoded; 
   CryptoPP::Base64Decoder decoder;
@@ -527,3 +583,131 @@ string ArduiRFMQTT::decode_b64(string to_decode)
 
   return decoded;
 }
+
+
+#ifdef OLED_DEBUG
+
+// craft time string HH:MM:SS
+std::string prettyTime()
+{
+time_t raw_time;
+time(&raw_time);
+struct tm * time_info;
+time_info = localtime( &raw_time );
+int h = time_info->tm_hour;
+std::stringstream h_ss;
+std::stringstream m_ss;
+std::stringstream s_ss;
+h = (h == 0) ? 12 : h; // midnight, 12AM
+h = (h>12) ? h-12 : h; // PM 13-23
+(h<10) ? h_ss << "0" : h_ss;  // add 0 to 1-9
+h_ss << h;
+(time_info->tm_min < 10) ? m_ss << "0" << time_info->tm_min : m_ss << time_info->tm_min; // add 0 to min string if less than 10
+(time_info->tm_sec < 10) ? s_ss << "0" << time_info->tm_sec : s_ss << time_info->tm_sec; // add 0 to sec string if less than 10
+std::stringstream time_str;
+time_str << h_ss.str() << ":" << m_ss.str()  << ":" << s_ss.str() ;
+return std::string(time_str.str());
+}
+
+
+
+void printHeader()
+{
+  display.setCursor(2,0);
+  display.print("RF24 Master");
+  //horizontal
+  display.drawLine(0, 10, display.width()-1, 10, WHITE);
+
+  // vertical
+  display.drawLine(75, 0, 75, 22, WHITE);
+  display.drawLine(75, 22, display.width()-1, 22, WHITE);
+  display.setCursor(90,0);
+  display.print("Time");
+  display.display();
+}
+
+void clearMainArea()
+{
+  display.fillRect(0, 12, 75, 11, BLACK);
+  display.fillRect(0, 23, display.width(), display.height()-1, BLACK);
+  display.display();
+}
+
+void printTime()
+{
+//clear previous time
+display.fillRect(76, 11, display.width()-1, 11, BLACK);
+display.setCursor(79,13);
+// set new time
+display.print(prettyTime().c_str());
+//display time
+display.display();
+}
+
+void printDisplay(toPrint &to_print)
+{
+  clearMainArea();
+
+if(to_print.out_msg || to_print.in_msg){
+
+  //horizontal
+
+display.setCursor(70,29);
+display.print("Topic");
+//display.drawLine(58, 10, 58, 20, WHITE);
+//horizontal
+display.drawLine(0, 27, display.width()-1, 27, WHITE);
+display.drawLine(0, 37, display.width()-1, 38, WHITE);
+display.drawLine(0, 47, display.width()-1, 47, WHITE);
+// vertical
+display.drawLine(24, 27, 24, 47, WHITE);
+display.drawLine(44, 27, 44, 47, WHITE);
+
+if(to_print.out_msg)
+{
+  display.setCursor(6,29);
+  display.print("To");
+  display.setCursor(10,16);
+  display.print("Msg Out!");
+} else if(to_print.in_msg)
+{
+  display.setCursor(2,29);
+  display.print("From");
+  display.setCursor(10,16);
+  display.print("Msg In!");
+}
+
+
+
+  std::stringstream node_addr_ss;
+  node_addr_ss << std::oct << to_print.node_addr;
+  std::string node_addr_str(node_addr_ss.str());
+  display.setCursor(1,39);
+  display.print(node_addr_str.c_str());
+
+
+  display.setCursor(28,29);
+  display.print("Ty");
+
+  std::stringstream msg_type_ss;
+  msg_type_ss << to_print.type;
+  std::string msg_type_str(msg_type_ss.str());
+  display.setCursor(26,39);
+  display.print(msg_type_str.c_str());
+
+
+
+  display.setCursor(48,39);
+  display.print(to_print.topic.c_str());
+
+  display.setCursor(0,49);
+  display.print(to_print.payload.c_str());
+
+
+}
+
+ display.display();
+}
+
+#endif  
+// oled debug

@@ -33,8 +33,11 @@ CCFLAGS=-std=c++0x -Ofast -march=$(ARCH) -mtune=cortex-a7 -mfpu=neon -mfloat-abi
 endif
 
 # define all programs
-PROGRAMS = automatond
+PROGRAMS = LinxRelay
 SOURCES = ${PROGRAMS:=.cpp}
+# no oled
+#LIBS=-lb2 -lcrypto++ -lmosquittopp -lrf24-bcm -lrf24network
+# with oled
 LIBS=-lb2 -lcrypto++ -lmosquittopp -lrf24-bcm -lrf24network -lArduiPi_OLED
 
 

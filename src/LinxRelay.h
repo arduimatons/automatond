@@ -1,7 +1,7 @@
-#ifndef AUTOMATOND_H
-  #define AUTOMATOND_H
+#ifndef LINXRELAY_H
+  #define LINXRELAY_H
   
-  #include "automatond_config.h"
+  #include "LinxRelay_config.h"
 
   // stdlib etc
   #include <stdbool.h> 
@@ -54,6 +54,23 @@
     #include "Adafruit_GFX.h"
     #include "ArduiPi_OLED.h"
     //void writeToOLED(ArduiPi_OLED &, std::string ,int ,int);
+
+    // defines how display should render
+    struct toPrint {
+      bool in_msg = false;
+      bool out_msg = false;
+      bool invaid = false;
+      uint16_t node_addr;
+      int type;
+      std::string topic;
+      std::string payload;
+    };
+
+    std::string prettyTime();
+    void clearMainArea();
+    void printHeader();
+    void printTime();
+    void printDisplay(toPrint &to_print);
   #endif
 
   #define DAEMON_NAME "automatond"
@@ -94,12 +111,12 @@ enum ACK_MSG_TYPES { FUNCTION_1 = 65, FUNCTION_2, FUNCTION_3};
   // used to grab config file as rapidjson document.
   rapidjson::Document getConfig(const char*);
 
-  class ArduiRFMQTT: public mosqpp::mosquittopp
+  class LinxMQTTRelay: public mosqpp::mosquittopp
   {
     public:
    //const char * _id
-      ArduiRFMQTT(const char* _id, RF24Network& network, rapidjson::Document& config);
-      ~ArduiRFMQTT();
+      LinxMQTTRelay(const char* _id, RF24Network& network, rapidjson::Document& config);
+      ~LinxMQTTRelay();
       // sent message over mqtt
       bool send_to_mqtt(uint16_t from_node, const char * _message);
       //
@@ -111,7 +128,7 @@ enum ACK_MSG_TYPES { FUNCTION_1 = 65, FUNCTION_2, FUNCTION_3};
       // multicasts a heartbeat
       void sendHeartbeat();
       // generates a hex, or encoded hash of string, returns hash
-      std::string genHash(std::string, bool encoded = true);
+      std::string genHash(std::string);
       // helpers for encoding/decoding b64
       std::string encode_b64(std::string);
       std::string decode_b64(std::string);
